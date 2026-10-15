@@ -70,12 +70,24 @@ async function mcpClient() {
 const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 describe("REST", () => {
-  it("healthz and CORS preflight", async () => {
-    expect((await (await fetch(`${base}/healthz`)).json())).toEqual({ ok: true });
-    const pre = await fetch(`${base}/api/override`, { method: "OPTIONS" });
-    expect(pre.status).toBe(204);
-    expect(pre.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
-    expect(pre.headers.get("access-control-allow-headers")).toContain("mcp-session-id");
+  it("healthz; no CORS headers by default (native Vega client)", async () => {
+    const res = await fetch(`${base}/healthz`);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("CORS preflight only when an origin is explicitly allowed", async () => {
+    const service = new CareService(new MemoryAdapter(createSeed(Date.now())));
+    const { app } = createApp({ service, storage: service.storage, allowedOrigin: "http://localhost:6274" });
+    const s = app.listen(0);
+    await new Promise((r) => s.once("listening", r));
+    try {
+      const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/override`;
+      const pre = await fetch(url, { method: "OPTIONS" });
+      expect(pre.status).toBe(204);
+      expect(pre.headers.get("access-control-allow-origin")).toBe("http://localhost:6274");
+      expect(pre.headers.get("access-control-allow-headers")).toContain("mcp-session-id");
+    } finally { s.closeAllConnections(); s.close(); }
   });
 
   it("GET /api/state returns patients, caregivers and inventory", async () => {

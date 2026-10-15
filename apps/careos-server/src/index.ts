@@ -22,6 +22,6 @@ const notifier = cfg.snsTopicArn ? new SnsNotifier(new SNSClient({ region: cfg.r
 const service = new CareService(storage, { notifier });
 const { app } = createApp({ service, storage, allowedOrigin: cfg.allowedOrigin, sseHeartbeatMs: cfg.sseHeartbeatMs });
 
-app.listen(cfg.port, () => {
-  console.error(`careos-server :${cfg.port}  storage=${cfg.storage}  alerts=${cfg.snsTopicArn ? "sns" : "console"}  mcp=/mcp`);
+app.listen(cfg.port, cfg.host, () => {
+  console.error(`careos-server ${cfg.host}:${cfg.port}  storage=${cfg.storage}  alerts=${cfg.snsTopicArn ? "sns" : "console"}  mcp=/mcp`);
 });

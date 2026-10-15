@@ -26,16 +26,21 @@ export function createApp(deps: AppDeps): { app: Express; trace: TraceBus } {
   app.disable("x-powered-by");
   app.set("etag", false);
 
-  app.use((req, res, next) => {
-    res.set({
-      "access-control-allow-origin": deps.allowedOrigin ?? "http://localhost:5173",
-      "access-control-allow-headers": "content-type, mcp-session-id, mcp-protocol-version, last-event-id",
-      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-      "access-control-expose-headers": "mcp-session-id",
+  // The Vega (Fire TV) client makes native HTTP calls with no browser origin, so CORS is opt-in:
+  // set ALLOWED_ORIGIN only for browser tools such as the MCP Inspector.
+  if (deps.allowedOrigin) {
+    const origin = deps.allowedOrigin;
+    app.use((req, res, next) => {
+      res.set({
+        "access-control-allow-origin": origin,
+        "access-control-allow-headers": "content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+        "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+        "access-control-expose-headers": "mcp-session-id",
+      });
+      if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+      next();
     });
-    if (req.method === "OPTIONS") { res.sendStatus(204); return; }
-    next();
-  });
+  }
 
   app.get("/healthz", (_req, res) => { res.json({ ok: true }); });
 
@@ -72,7 +77,7 @@ export function createApp(deps: AppDeps): { app: Express; trace: TraceBus } {
 
   app.get("/api/trace", (req, res) => {
     const sse = openSse(req, res, heartbeat);
-    // Resume support: browsers resend Last-Event-ID on reconnect.
+    // Resume support: clients resend Last-Event-ID (or ?since=) on reconnect.
     const last = Number(req.headers["last-event-id"] ?? req.query.since ?? 0) || 0;
     for (const e of trace.since(last)) sse.send("frame", e, e.id);
     const onEvent = (e: unknown) => sse.send("frame", e, (e as { id: number }).id);

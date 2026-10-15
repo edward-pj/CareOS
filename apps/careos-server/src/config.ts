@@ -5,7 +5,9 @@ export interface Config {
   ddbEndpoint?: string;
   region: string;
   snsTopicArn?: string;
-  allowedOrigin: string;
+  /** Browser origin to allow via CORS. Unset for the native Vega client. */
+  allowedOrigin?: string;
+  host: string;
   sseHeartbeatMs: number;
 }
 
@@ -19,7 +21,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ddbEndpoint: env.DDB_ENDPOINT || undefined,
     region: env.AWS_REGION ?? "us-east-1",
     snsTopicArn: env.SNS_TOPIC_ARN || undefined,
-    allowedOrigin: env.ALLOWED_ORIGIN ?? "http://localhost:5173",
+    allowedOrigin: env.ALLOWED_ORIGIN || undefined,
+    // 0.0.0.0 so a Vega device / virtual device on the LAN can reach the server.
+    host: env.HOST ?? "0.0.0.0",
     sseHeartbeatMs: Number(env.SSE_HEARTBEAT_MS ?? 25_000),
   };
 }
