@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { createMcpHttpHandler } from "../src/http.js";
-import { CareService, MemoryAdapter, createCareMcpServer, createSeed } from "../src/server.js";
+import { createMcpHttpHandler } from "../http.js";
+import { CareService, MemoryAdapter, createCareMcpServer, createSeed } from "../server.js";
 
 const service = new CareService(new MemoryAdapter(createSeed(Date.now())));
 const handle = createMcpHttpHandler({ createServer: () => createCareMcpServer(service) });

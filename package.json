@@ -5,7 +5,13 @@
   "scripts": {
     "test": "pnpm -r test",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "ddb:setup": "bash scripts/setup-dynamodb-local.sh",
+    "ddb:local": "bash scripts/dynamodb-local.sh",
+    "dev:server": "pnpm --filter careos-server dev",
+    "dev:server:dynamo": "STORAGE=dynamo DDB_ENDPOINT=http://localhost:8000 pnpm --filter careos-server dev"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

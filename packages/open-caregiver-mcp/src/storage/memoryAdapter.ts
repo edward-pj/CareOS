@@ -23,6 +23,7 @@ export class MemoryAdapter implements StorageAdapter {
     this.overrides.clear();
   }
 
+  async reset(seed: SeedData) { this.load(seed); }
   async getPatient(id: string) { return this.patients.get(id); }
   async listPatients() { return [...this.patients.values()]; }
   async getCaregivers() { return this.caregivers; }

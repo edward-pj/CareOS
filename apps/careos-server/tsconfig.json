@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "open-caregiver-mcp": ["../../packages/open-caregiver-mcp/src/server.ts"],
+      "open-caregiver-mcp/http": ["../../packages/open-caregiver-mcp/src/http.ts"]
+    }
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

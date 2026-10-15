@@ -1,4 +1,5 @@
 import type { IntervalResult, LedgerEntry } from "../engines/intervalLock.js";
+import type { SeedData } from "./seed.js";
 
 export interface Patient {
   id: string; // "leo", "frank"
@@ -69,6 +70,8 @@ export interface Cart {
  * caregivers dosing at once cannot both win. (DynamoDB: TransactWriteItems.)
  */
 export interface StorageAdapter {
+  /** Wipe all state and load the seed. Demo/test only. */
+  reset(seed: SeedData): Promise<void>;
   getPatient(id: string): Promise<Patient | undefined>;
   listPatients(): Promise<Patient[]>;
   getCaregivers(): Promise<Caregiver[]>;

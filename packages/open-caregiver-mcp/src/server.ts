@@ -8,7 +8,7 @@ export { CareService } from "./service.js";
 export type { Payload, CardType } from "./service.js";
 export * from "./storage/types.js";
 export { MemoryAdapter, MemoryNotifier } from "./storage/memoryAdapter.js";
-export { createSeed } from "./storage/seed.js";
+export { createSeed, type SeedData } from "./storage/seed.js";
 
 // Schemas stay flat (primitives, enums, one array of flat objects): no $defs/anyOf,
 // so they pass strict-schema validators such as Amazon Bedrock tool config as-is.

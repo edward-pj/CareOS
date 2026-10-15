@@ -175,6 +175,25 @@ export class CareService {
     await this.notifier?.send("LOCKOUT_ATTEMPT", `CareOS: blocked a repeat ${ingredient} dose for ${p.name}. ${last.caregiver} gave ${last.volumeMl ?? "?"} mL ${i.minutesAgo} min ago.`);
   }
 
+  private async replayIfRecorded(patientId: string, key: string): Promise<Payload | undefined> {
+    const prior = await this.storage.getEventByKey(key);
+    if (!prior || prior.patientId !== patientId) return undefined;
+    const rule = intervalRuleFor(prior.ingredient);
+    const inv = (await this.storage.getInventory()).find((i) => i.ingredient === prior.ingredient && i.unit === "mL");
+    const low = inv ? inv.remaining < inv.lowThreshold : false;
+    return {
+      status: "LOGGED",
+      replay: true,
+      event_id: prior.eventId,
+      next_eligible_time: new Date(prior.at + rule.minIntervalHours * H).toISOString(),
+      bottle_remaining_ml: inv?.remaining ?? null,
+      low_stock: low,
+      suggested_restock_items: low && inv ? [inv.name] : [],
+      sns_message_id: null,
+      card_type: null,
+    };
+  }
+
   // --------------------------------------------------------------- logging
   async logAdministrationEvent(a: { patient_id: string; caregiver_name: string; medication: string; volume_ml: number; temperature_f?: number; idempotency_key?: string }): Promise<Payload> {
     const p = await this.patient(a.patient_id);
@@ -183,28 +202,20 @@ export class CareService {
 
     // A retry of an already-recorded dose must return the original outcome, not trip the lock it created.
     if (a.idempotency_key) {
-      const prior = await this.storage.getEventByKey(a.idempotency_key);
-      if (prior && prior.patientId === p.id) {
-        const rule = intervalRuleFor(prior.ingredient);
-        const inv = (await this.storage.getInventory()).find((i) => i.ingredient === prior.ingredient && i.unit === "mL");
-        return {
-          status: "LOGGED",
-          replay: true,
-          event_id: prior.eventId,
-          next_eligible_time: new Date(prior.at + rule.minIntervalHours * H).toISOString(),
-          bottle_remaining_ml: inv?.remaining ?? null,
-          low_stock: inv ? inv.remaining < inv.lowThreshold : false,
-          suggested_restock_items: inv && inv.remaining < inv.lowThreshold ? [inv.name] : [],
-          sns_message_id: null,
-          card_type: null,
-        };
-      }
+      const replayed = await this.replayIfRecorded(p.id, a.idempotency_key);
+      if (replayed) return replayed;
     }
 
     // Re-verify server-side so a model that skips verify_medication_safety cannot bypass it.
     const verdict = await this.verifyMedicationSafety({ patient_id: p.id, proposed_medication: a.medication, administration_intent: true });
     if (verdict.status === "BLOCKED") {
-      return { ...verdict, status: verdict.violation_type === "DOUBLE_DOSE_LOCKED" || verdict.violation_type === "DAILY_MAX" ? "REJECTED_LOCKED" : "REJECTED_UNSAFE" };
+      const locked = verdict.violation_type === "DOUBLE_DOSE_LOCKED" || verdict.violation_type === "DAILY_MAX";
+      if (locked && a.idempotency_key) {
+        // The lock may belong to a concurrent retry of this same request.
+        const replayed = await this.replayIfRecorded(p.id, a.idempotency_key);
+        if (replayed) return replayed;
+      }
+      return { ...verdict, status: locked ? "REJECTED_LOCKED" : "REJECTED_UNSAFE" };
     }
     const ingredient = drug!.ingredient;
 
