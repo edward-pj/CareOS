@@ -1,0 +1,11 @@
+{
+  "name": "careos",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": { "node": ">=22" }
+}
