@@ -8,9 +8,11 @@
     "start": "node dist/index.js",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke:bedrock": "tsx scripts/smoke-bedrock.ts"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.35.0",
     "@aws-sdk/client-dynamodb": "^3.1000.0",
     "@aws-sdk/client-sns": "^3.1000.0",
     "@aws-sdk/lib-dynamodb": "^3.1000.0",

@@ -14,8 +14,8 @@ DynamoDB/SNS design and safety rules are unchanged; only the **client** and the 
 | 2 | MCP server + Streamable HTTP mount | done |
 | 3 | `careos-server`, DynamoDB transact writes, SNS, trace tap | done (committed in `f5e7bc8`) |
 | 3.5 | Vega retarget: CORS opt-in, `HOST`, `confirm_label`, `apps/careos-vega` shell | **this change** |
-| 4 | Bedrock orchestrator (+ Vega-safe transport) | next |
-| 5 | Vega client: voice-less input, state, inspector | after 4 |
+| 4 | Bedrock orchestrator (+ Vega-safe transport) | done: tested offline (mock model); live Bedrock smoke script written but not run |
+| 5 | Vega client: conversation UI over long-poll, state, inspector | next |
 | 6 | Vega cards (5) | after 5 |
 | 7 | Demo script, hardening, deploy | after 6 |
 | 8 | Open-source release + submission | after 7 |
@@ -45,13 +45,16 @@ Echo target.
 
 ## Revised delivery
 
-**Phase 4 — Bedrock orchestrator (server, ~1 day).** As originally planned, plus: expose each turn over SSE *and* a
-Vega-safe transport (constraint 3); the numeric guardrail and `LLM_MODE=mock` regex parser are unchanged. The mock
-parser must accept typed/dictated text (keyboard mic output is plain text, often unpunctuated).
+**Phase 4 — Bedrock orchestrator (server). Done.**
+- `apps/careos-server/src/orchestrator/`: `BedrockLlm` (Mantle Messages API, `effort: "low"`, `tool_choice: auto`, strict tools), `MockLlm` (offline regex intents), tool bridge/sanitizer, tool-use loop, numeric guardrail, `Orchestrator` (sessions, one turn per session).
+- **Transport decision (constraint 3):** `POST /api/converse` returns `202 {turn_id}`. Events are read with a cursor long-poll, `GET /api/turns/:id/events?after=N&wait=S` (plain XHR, what Vega documents), or SSE, `GET /api/turns/:id/stream` (tests, browsers, MCP-style tools). Both read one event log, so a card is delivered as soon as its tool returns, before the reply text.
+- **Safety decisions:** `override_lockout` is withheld from the model (PINs go through the device keypad to `/api/override`); every dose amount (mg/mL) in a reply must appear in a tool result from the same turn, otherwise the reply is replaced and a `GUARDRAIL_REPLACED` alert is emitted; `log_administration_event` still re-verifies server-side.
+- **Deferred:** token streaming (Bedrock calls are non-streaming; replies are one or two sentences) and a WebSocket transport (only worth adding if long-poll latency is a problem on device).
+- **Verified:** the five demo flows through the mock model over a real HTTP/MCP hop, both transports, 99 tests total. **Not verified:** any live Bedrock call (`pnpm --filter careos-server smoke:bedrock` needs AWS credentials), and long-poll behaviour on a real Vega device.
 
-**Phase 5 — Vega shell (~1.5 days).** `apps/careos-vega`: theme, `ErrorBoundary`, typed API client (XHR), profile
-chips (Leo/Frank), household state (locks with countdowns, inventory), command bar (`TextInput` + quick actions),
-dialogue history, inspector screen (dev only). Skills: ui-components, navigation, focus-management, app-manifest,
+**Phase 5 — Vega client (~1.5 days).** Shell exists (theme, `ErrorBoundary`, XHR client, profile chips, locks, stock).
+Remaining: conversation screen (`TextInput` + keyboard mic + quick actions) driving `/api/converse` by long-poll,
+dialogue history, `aria-live` reply, inspector screen (dev only). Skills: ui-components, navigation, focus-management, app-manifest,
 best-practices, build-and-run.
 
 **Phase 6 — Vega cards (~1.5 days).** SyringeCalibrator (native-driver `scaleX`), DoubleDoseIntercept (full-screen

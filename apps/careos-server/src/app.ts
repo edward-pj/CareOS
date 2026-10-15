@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { z } from "zod";
 import { createCareMcpServer, createSeed, type CareService, type StorageAdapter } from "open-caregiver-mcp";
 import { createMcpHttpHandler } from "open-caregiver-mcp/http";
+import type { Orchestrator } from "./orchestrator/index.js";
 import { openSse } from "./sse.js";
 import { TraceBus } from "./trace.js";
 
@@ -9,9 +10,18 @@ export interface AppDeps {
   service: CareService;
   storage: StorageAdapter;
   trace?: TraceBus;
+  orchestrator?: Orchestrator;
   allowedOrigin?: string;
   sseHeartbeatMs?: number;
 }
+
+const converseBody = z.object({
+  session_id: z.string().min(1).max(64),
+  active_profile: z.string().min(1).max(32),
+  caregiver: z.string().min(1).max(64),
+  transcript: z.string().trim().min(1).max(500),
+});
+const MAX_LONG_POLL_S = 25;
 
 const overrideBody = z.object({ patient_id: z.string(), ingredient: z.string(), caregiver: z.string(), pin: z.string().regex(/^\d{4}$/) });
 const resetBody = z.object({ sarah_dosed_minutes_ago: z.number().min(0).max(24 * 60).optional() }).default({});
@@ -73,6 +83,56 @@ export function createApp(deps: AppDeps): { app: Express; trace: TraceBus } {
     try {
       res.json(await service.overrideLockout(overrideBody.parse(req.body)));
     } catch (e) { next(e); }
+  });
+
+  // ---- conversation: POST starts a turn; events are read by cursor long-poll (Vega) or SSE.
+  const orchestrator = deps.orchestrator;
+  const requireOrchestrator = (res: Response): Orchestrator | undefined => {
+    if (!orchestrator || !orchestrator.isReady) { res.status(503).json({ error: "orchestrator_unavailable" }); return undefined; }
+    return orchestrator;
+  };
+
+  app.post("/api/converse", express.json({ limit: "16kb" }), (req, res) => {
+    const o = requireOrchestrator(res);
+    if (!o) return;
+    const body = converseBody.parse(req.body);
+    const started = o.start(body);
+    if (started === "busy") { res.status(409).json({ error: "turn_in_progress" }); return; }
+    res.status(202).json({ turn_id: started.turnId });
+  });
+
+  app.get("/api/turns/:id/events", async (req, res) => {
+    const o = requireOrchestrator(res);
+    if (!o) return;
+    const id = String(req.params.id);
+    if (!o.turns.has(id)) { res.status(404).json({ error: "unknown_turn" }); return; }
+    const after = Math.max(0, Math.floor(Number(req.query.after ?? 0)) || 0);
+    const waitS = Math.min(MAX_LONG_POLL_S, Math.max(0, Number(req.query.wait ?? 0) || 0));
+    const ac = new AbortController();
+    res.on("close", () => ac.abort());
+    if (waitS > 0) await o.turns.wait(id, after, waitS * 1000, ac.signal);
+    if (ac.signal.aborted) return;
+    const r = o.turns.after(id, after)!;
+    res.json({ events: r.events, done: r.done, next: after + r.events.length });
+  });
+
+  app.get("/api/turns/:id/stream", async (req, res) => {
+    const o = requireOrchestrator(res);
+    if (!o) return;
+    const id = String(req.params.id);
+    if (!o.turns.has(id)) { res.status(404).json({ error: "unknown_turn" }); return; }
+    const sse = openSse(req, res, heartbeat);
+    const ac = new AbortController();
+    res.on("close", () => ac.abort());
+    let sent = Math.max(0, Number(req.headers["last-event-id"] ?? req.query.after ?? 0) || 0);
+    for (;;) {
+      const r = o.turns.after(id, sent);
+      if (!r) { sse.close(); return; }
+      for (const e of r.events) { sse.send(e.type, e.data, e.seq); sent = e.seq; }
+      if (r.done) { sse.close(); return; }
+      if (sse.closed || ac.signal.aborted) return;
+      await o.turns.wait(id, sent, heartbeat, ac.signal);
+    }
   });
 
   app.get("/api/trace", (req, res) => {
