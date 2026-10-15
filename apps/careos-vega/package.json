@@ -7,7 +7,8 @@
     "start": "react-native start",
     "build:debug": "vega build -b Debug",
     "build:release": "vega build -b Release",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@amazon-devices/react-native-kepler": "^4.0.0+rn0.83.0",
@@ -23,6 +24,7 @@
     "@react-native/babel-preset": "^0.83.0",
     "@react-native/metro-config": "^0.83.0",
     "@types/react": "^19.2.0",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "vitest": "^2.1.9"
   }
 }

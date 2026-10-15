@@ -4,7 +4,9 @@ import {Carousel, type CarouselRenderInfo} from '@amazon-devices/vega-carousel';
 import type {ActiveLock, InventoryItem, PatientSnapshot} from '../api/types';
 import {api} from '../api/client';
 import {FocusablePressable} from '../components/FocusablePressable';
-import {useHouseholdState} from '../hooks/useHouseholdState';
+import type {StackScreenProps} from '@amazon-devices/react-navigation__stack';
+import type {RootStackParamList} from '../App';
+import {useHousehold} from '../state/HouseholdContext';
 import {useNow} from '../hooks/useNow';
 import {colors, space, type} from '../theme';
 import {formatRemaining} from '../utils/time';
@@ -67,8 +69,8 @@ function PatientPanel({patient, nowMs}: {patient: PatientSnapshot; nowMs: number
   );
 }
 
-export function HomeScreen() {
-  const {data, clockSkewMs, error, loading, refresh} = useHouseholdState();
+export function HomeScreen({navigation}: StackScreenProps<RootStackParamList, 'Home'>) {
+  const {data, clockSkewMs, error, loading, refresh} = useHousehold();
   const nowMs = useNow(clockSkewMs);
   const [selectedId, setSelectedId] = useState<string>();
 
@@ -139,6 +141,9 @@ export function HomeScreen() {
       ) : null}
 
       <View style={styles.footer}>
+        {selected ? (
+          <FocusablePressable label={`Ask about ${selected.profile.name}`} onPress={() => navigation.navigate('Ask', {profileId: selected.profile.id})} />
+        ) : null}
         <FocusablePressable label="Retry" onPress={() => void refresh()} />
         <FocusablePressable label="Reset demo" onPress={() => void resetDemo()} />
         <Text style={styles.disclaimer}>Demo — not a medical device.</Text>

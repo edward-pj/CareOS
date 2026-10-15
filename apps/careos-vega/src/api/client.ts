@@ -1,5 +1,5 @@
-import {REQUEST_TIMEOUT_MS, SERVER_URL} from '../config';
-import type {StateResponse} from './types';
+import {LONG_POLL_WAIT_S, REQUEST_TIMEOUT_MS, SERVER_URL} from '../config';
+import type {ConverseRequest, StateResponse, TurnPage} from './types';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -9,12 +9,17 @@ export class ApiError extends Error {
 }
 
 // Vega documents XMLHttpRequest and WebSocket; streaming fetch / EventSource are not documented,
-// so this client sticks to XHR. Streaming turns (Phase 4) will use a WebSocket or cursor long-poll.
-function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+// so this client sticks to XHR. Conversation turns are read by cursor long-poll (see conversation/poll.ts).
+function request<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(method, `${SERVER_URL}${path}`);
-    xhr.timeout = REQUEST_TIMEOUT_MS;
+    xhr.timeout = timeoutMs;
     xhr.setRequestHeader('accept', 'application/json');
     if (body !== undefined) {
       xhr.setRequestHeader('content-type', 'application/json');
@@ -39,4 +44,8 @@ function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promi
 export const api = {
   getState: () => request<StateResponse>('GET', '/api/state'),
   resetDemo: () => request<{ok: true}>('POST', '/api/demo/reset', {}),
+  converse: (body: ConverseRequest) => request<{turn_id: string}>('POST', '/api/converse', body),
+  /** Cursor long-poll: the server holds the request up to `waitS` seconds for new events. */
+  getTurnEvents: (turnId: string, after: number, waitS = LONG_POLL_WAIT_S) =>
+    request<TurnPage>('GET', `/api/turns/${turnId}/events?after=${after}&wait=${waitS}`, undefined, (waitS + 10) * 1000),
 };

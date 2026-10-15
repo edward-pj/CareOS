@@ -5,3 +5,4 @@ export const SERVER_URL = 'http://localhost:8787';
 
 export const STATE_POLL_MS = 15_000;
 export const REQUEST_TIMEOUT_MS = 10_000;
+export const LONG_POLL_WAIT_S = 20; // server caps at 25

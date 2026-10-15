@@ -15,8 +15,8 @@ DynamoDB/SNS design and safety rules are unchanged; only the **client** and the 
 | 3 | `careos-server`, DynamoDB transact writes, SNS, trace tap | done (committed in `f5e7bc8`) |
 | 3.5 | Vega retarget: CORS opt-in, `HOST`, `confirm_label`, `apps/careos-vega` shell | **this change** |
 | 4 | Bedrock orchestrator (+ Vega-safe transport) | done: tested offline (mock model); live Bedrock smoke script written but not run |
-| 5 | Vega client: conversation UI over long-poll, state, inspector | next |
-| 6 | Vega cards (5) | after 5 |
+| 5 | Vega client: conversation UI over long-poll, state | done in code, type-checked and unit-tested; not run on a device. Inspector screen deferred to Phase 7 (dev tool) |
+| 6 | Vega cards (5) | next |
 | 7 | Demo script, hardening, deploy | after 6 |
 | 8 | Open-source release + submission | after 7 |
 
@@ -52,10 +52,13 @@ Echo target.
 - **Deferred:** token streaming (Bedrock calls are non-streaming; replies are one or two sentences) and a WebSocket transport (only worth adding if long-poll latency is a problem on device).
 - **Verified:** the five demo flows through the mock model over a real HTTP/MCP hop, both transports, 99 tests total. **Not verified:** any live Bedrock call (`pnpm --filter careos-server smoke:bedrock` needs AWS credentials), and long-poll behaviour on a real Vega device.
 
-**Phase 5 — Vega client (~1.5 days).** Shell exists (theme, `ErrorBoundary`, XHR client, profile chips, locks, stock).
-Remaining: conversation screen (`TextInput` + keyboard mic + quick actions) driving `/api/converse` by long-poll,
-dialogue history, `aria-live` reply, inspector screen (dev only). Skills: ui-components, navigation, focus-management, app-manifest,
-best-practices, build-and-run.
+**Phase 5 — Vega client. Done in code; device run pending.**
+- `AskScreen`: `TextInput` (keyboard mic via the Alexa button), Send, quick actions (fever dose from the profile weight, sore throat, restock, confirm), stable `aria-live` reply and assertive alert regions, a plain facts panel for the latest card, caregiver chips.
+- Logic lives in pure modules with 29 vitest tests (`npm test` in `apps/careos-vega`): `conversation/reducer.ts`, `conversation/poll.ts` (cursor long-poll with idempotent retries and backoff), `conversation/cardFacts.ts` (copies numbers from payloads, never derives them), `utils/time.ts`.
+- Contract check: the real reducer, poll follower and card facts were run against the real server in mock mode (dose flow shows 2 mL; the lock flow shows 328 min and names Sarah). That check was a one-off and is not committed.
+- Shared household state is one provider (`HouseholdContext`), so screens do not each poll.
+- **Unverified until a Vega device/VVD run:** keyboard-mic dictation into `TextInput`, `onSubmitEditing`, `aria-live` announcements in VoiceView, `vega-carousel` selection, XHR long-poll to `localhost` (cleartext policy), and the final `vega build`.
+- **Deferred:** inspector screen (needs `/api/trace`, which is SSE; a long-poll variant is required first).
 
 **Phase 6 — Vega cards (~1.5 days).** SyringeCalibrator (native-driver `scaleX`), DoubleDoseIntercept (full-screen
 overlay, D-pad PIN keypad, chime via Vega audio lib), ContraindicationShield, PantryRemedy, RestockCarousel (Vega

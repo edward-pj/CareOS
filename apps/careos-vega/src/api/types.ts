@@ -58,3 +58,35 @@ export interface StateResponse {
   caregivers: Caregiver[];
   inventory: InventoryItem[];
 }
+
+// ---- Conversation (Phase 4 server contract: POST /api/converse, GET /api/turns/:id/events)
+
+export type CardType =
+  | 'SYRINGE_CALIBRATOR'
+  | 'DOUBLE_DOSE_INTERCEPT'
+  | 'CONTRAINDICATION_SHIELD'
+  | 'PANTRY_REMEDY'
+  | 'AMAZON_RESTOCK_CAROUSEL';
+
+export type TurnEvent =
+  | {seq: number; type: 'assistant_delta'; data: {text: string}}
+  | {seq: number; type: 'tool_call'; data: {id: string; name: string; input: Record<string, unknown>}}
+  | {seq: number; type: 'tool_result'; data: {id: string; name: string; status?: string; is_error: boolean}}
+  | {seq: number; type: 'card'; data: {card_type: CardType; tool: string; payload: Record<string, unknown>}}
+  | {seq: number; type: 'alert'; data: {kind: string; violation_type?: string | null; offending?: string[]; tool?: string}}
+  | {seq: number; type: 'error'; data: {message: string}}
+  | {seq: number; type: 'done'; data: Record<string, never>};
+
+export interface TurnPage {
+  events: TurnEvent[];
+  done: boolean;
+  /** Cursor to pass as `after` on the next request. */
+  next: number;
+}
+
+export interface ConverseRequest {
+  session_id: string;
+  active_profile: string;
+  caregiver: string;
+  transcript: string;
+}
