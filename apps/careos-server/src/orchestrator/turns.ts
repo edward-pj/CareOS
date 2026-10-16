@@ -7,7 +7,7 @@ interface Turn { events: StoredEvent[]; done: boolean; createdAt: number; bus: E
 
 /**
  * Per-turn event log with a cursor. One source feeds both transports: SSE for browsers/tests and a
- * cursor long-poll for Vega, where only XMLHttpRequest and WebSocket are documented (no streaming fetch / EventSource).
+ * cursor long-poll for clients without a streaming API.
  */
 export class TurnStore {
   private turns = new Map<string, Turn>();

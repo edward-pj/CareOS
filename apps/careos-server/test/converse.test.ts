@@ -35,7 +35,7 @@ let n = 0;
 
 interface Ev { seq: number; type: string; data: any }
 
-/** Runs a turn end to end through the Vega-style cursor long-poll (plain request/response, no streaming). */
+/** Runs a turn end to end through the cursor long-poll (plain request/response, no streaming). */
 async function say(transcript: string, o: { session?: string; profile?: string; caregiver?: string } = {}) {
   const res = await json("/api/converse", { session_id: o.session ?? `s${++n}`, active_profile: o.profile ?? "leo", caregiver: o.caregiver ?? "Sarah (Mom)", transcript });
   expect(res.status).toBe(202);

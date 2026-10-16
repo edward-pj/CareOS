@@ -1,8 +1,5 @@
 packages:
   - packages/*
   - apps/*
-  # The Vega app is built with npm + the Vega SDK (vega build), which does not understand
-  # pnpm's workspace: protocol. It is a standalone project that only talks to careos-server over HTTP.
-  - "!apps/careos-vega"
 allowBuilds:
   esbuild: true

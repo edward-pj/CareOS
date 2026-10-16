@@ -312,7 +312,7 @@ export class CareService {
       items: lines.map((l) => ({ name: l.itemName, channel: l.channel, merchant: l.merchantLabel, price_usd: l.priceUsd })),
       total_usd: totalUsd,
       eta: cart.eta,
-      // Label for the on-screen confirm control (a D-pad button on Vega); also what a caregiver can dictate.
+      // Label for the on-screen confirm control (a button in the web app); also what a caregiver can say.
       confirm_label: "Confirm restock order",
       unavailable_items: unavailable,
       card_type: "AMAZON_RESTOCK_CAROUSEL",

@@ -36,7 +36,7 @@ export function createApp(deps: AppDeps): { app: Express; trace: TraceBus } {
   app.disable("x-powered-by");
   app.set("etag", false);
 
-  // The Vega (Fire TV) client makes native HTTP calls with no browser origin, so CORS is opt-in:
+  // The web app reaches this server through the Vite dev proxy (same origin), so CORS is opt-in:
   // set ALLOWED_ORIGIN only for browser tools such as the MCP Inspector.
   if (deps.allowedOrigin) {
     const origin = deps.allowedOrigin;
@@ -85,7 +85,7 @@ export function createApp(deps: AppDeps): { app: Express; trace: TraceBus } {
     } catch (e) { next(e); }
   });
 
-  // ---- conversation: POST starts a turn; events are read by cursor long-poll (Vega) or SSE.
+  // ---- conversation: POST starts a turn; events are read over SSE (the web app) or by cursor long-poll (plain request/response clients).
   const orchestrator = deps.orchestrator;
   const requireOrchestrator = (res: Response): Orchestrator | undefined => {
     if (!orchestrator || !orchestrator.isReady) { res.status(503).json({ error: "orchestrator_unavailable" }); return undefined; }

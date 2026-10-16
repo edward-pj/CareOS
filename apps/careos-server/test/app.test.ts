@@ -70,7 +70,7 @@ async function mcpClient() {
 const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 describe("REST", () => {
-  it("healthz; no CORS headers by default (native Vega client)", async () => {
+  it("healthz; no CORS headers by default (same-origin web app)", async () => {
     const res = await fetch(`${base}/healthz`);
     expect(await res.json()).toEqual({ ok: true });
     expect(res.headers.get("access-control-allow-origin")).toBeNull();

@@ -9,6 +9,7 @@
     "ddb:setup": "bash scripts/setup-dynamodb-local.sh",
     "ddb:local": "bash scripts/dynamodb-local.sh",
     "dev:server": "pnpm --filter careos-server dev",
+    "dev:web": "pnpm --filter careos-web dev",
     "dev:server:dynamo": "STORAGE=dynamo DDB_ENDPOINT=http://localhost:8000 pnpm --filter careos-server dev"
   },
   "engines": {

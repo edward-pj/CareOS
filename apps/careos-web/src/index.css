@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+@keyframes flash-live { from { background-color: rgb(34 211 238 / 0.25); } to { background-color: transparent; } }
+.flash-live { animation: flash-live 0.9s ease-out; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }

@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 export interface Config {
   port: number;
   storage: "memory" | "dynamo";
@@ -5,7 +8,7 @@ export interface Config {
   ddbEndpoint?: string;
   region: string;
   snsTopicArn?: string;
-  /** Browser origin to allow via CORS. Unset for the native Vega client. */
+  /** Browser origin to allow via CORS. Unset when the web app reaches the server through the Vite proxy (same origin). */
   allowedOrigin?: string;
   host: string;
   llmMode: "mock" | "bedrock";
@@ -13,7 +16,29 @@ export interface Config {
   sseHeartbeatMs: number;
 }
 
+function tryLoadEnv(): void {
+  if (typeof process.loadEnvFile !== "function") return;
+  const candidates = [
+    resolve(process.cwd(), ".env"),
+    resolve(import.meta.dirname, "../../../.env"),
+    resolve(import.meta.dirname, "../../.env"),
+  ];
+  for (const file of candidates) {
+    if (existsSync(file)) {
+      try {
+        process.loadEnvFile(file);
+        break;
+      } catch {
+        // Ignore unreadable .env
+      }
+    }
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  if (env === process.env) {
+    tryLoadEnv();
+  }
   const storage = (env.STORAGE ?? "memory") as Config["storage"];
   if (storage !== "memory" && storage !== "dynamo") throw new Error(`STORAGE must be "memory" or "dynamo", got "${storage}"`);
   const llmMode = (env.LLM_MODE ?? "mock") as Config["llmMode"];
@@ -28,8 +53,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     region: env.AWS_REGION ?? "us-east-1",
     snsTopicArn: env.SNS_TOPIC_ARN || undefined,
     allowedOrigin: env.ALLOWED_ORIGIN || undefined,
-    // 0.0.0.0 so a Vega device / virtual device on the LAN can reach the server.
-    host: env.HOST ?? "0.0.0.0",
+    // Loopback by default: the demo server is unauthenticated, so it should not listen on the LAN unless asked.
+    host: env.HOST ?? "127.0.0.1",
     sseHeartbeatMs: Number(env.SSE_HEARTBEAT_MS ?? 25_000),
   };
 }
