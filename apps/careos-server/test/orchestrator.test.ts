@@ -4,7 +4,7 @@ import { guardReply, numbersIn, SAFE_FALLBACK, unbackedAmounts } from "../src/or
 import type { LlmClient, LlmMessage, LlmRequest, LlmResponse } from "../src/orchestrator/llm.js";
 import { runTurn, trimHistory, type TurnEventType } from "../src/orchestrator/loop.js";
 import type { ToolOutcome, ToolRunner } from "../src/orchestrator/mcpClient.js";
-import { sanitizeSchema, toClaudeTools } from "../src/orchestrator/toolBridge.js";
+import { sanitizeSchema, toLlmTools } from "../src/orchestrator/toolBridge.js";
 import { TurnStore } from "../src/orchestrator/turns.js";
 
 describe("toolBridge.sanitizeSchema", () => {
@@ -33,12 +33,11 @@ describe("toolBridge.sanitizeSchema", () => {
   });
 
   it("never offers override_lockout to the model", () => {
-    const tools = toClaudeTools([
+    const tools = toLlmTools([
       { name: "override_lockout", inputSchema: { type: "object", properties: { pin: { type: "string" } } } },
       { name: "verify_medication_safety", inputSchema: { type: "object", properties: {} } },
     ]);
     expect(tools.map((t) => t.name)).toEqual(["verify_medication_safety"]);
-    expect(tools[0]!.strict).toBe(true);
   });
 });
 
@@ -226,15 +225,28 @@ describe("TurnStore", () => {
 });
 
 describe("BedrockLlm", () => {
-  it("sends strict tools, auto tool choice and low effort; maps text and tool_use blocks", async () => {
-    let params: any;
+  it("sends Converse tool config with auto choice; maps text and toolUse blocks and tool results", async () => {
+    let input: any;
     const llm = new BedrockLlm({
-      region: "us-east-1", modelId: "anthropic.claude-opus-5-5",
-      client: { messages: { create: async (p: any) => { params = p; return { stop_reason: "tool_use", content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "hi" }, { type: "tool_use", id: "tu1", name: "n", input: { a: 1 } }] }; } } },
+      region: "us-east-1", modelId: "us.amazon.nova-pro-v1:0",
+      client: { converse: async (p: any) => { input = p; return { stopReason: "tool_use", output: { message: { role: "assistant", content: [{ text: "hi" }, { toolUse: { toolUseId: "tu1", name: "n", input: { a: 1 } } }] } } }; } },
     });
-    const tools = [{ name: "n", description: "d", input_schema: { type: "object" }, strict: true as const }];
-    const res = await llm.complete({ system: "sys", messages: [{ role: "user", content: "q" }], tools, context: ctx });
-    expect(params).toMatchObject({ model: "anthropic.claude-opus-5-5", system: "sys", tool_choice: { type: "auto" }, output_config: { effort: "low" }, tools });
+    const tools = [{ name: "n", description: "d", input_schema: { type: "object" } }];
+    const messages = [
+      { role: "user" as const, content: "q" },
+      { role: "assistant" as const, content: [{ type: "tool_use" as const, id: "t0", name: "n", input: {} }] },
+      { role: "user" as const, content: [{ type: "tool_result" as const, tool_use_id: "t0", content: "boom", is_error: true }] },
+    ];
+    const res = await llm.complete({ system: "sys", messages, tools, context: ctx });
+    expect(input).toMatchObject({
+      modelId: "us.amazon.nova-pro-v1:0",
+      system: [{ text: "sys" }],
+      toolConfig: { toolChoice: { auto: {} }, tools: [{ toolSpec: { name: "n", description: "d", inputSchema: { json: { type: "object" } } } }] },
+      inferenceConfig: { temperature: 0 },
+    });
+    expect(input.messages[0]).toEqual({ role: "user", content: [{ text: "q" }] });
+    expect(input.messages[1].content[0]).toEqual({ toolUse: { toolUseId: "t0", name: "n", input: {} } });
+    expect(input.messages[2].content[0]).toEqual({ toolResult: { toolUseId: "t0", content: [{ text: "boom" }], status: "error" } });
     expect(res.stopReason).toBe("tool_use");
     expect(res.content).toEqual([{ type: "text", text: "hi" }, { type: "tool_use", id: "tu1", name: "n", input: { a: 1 } }]);
   });

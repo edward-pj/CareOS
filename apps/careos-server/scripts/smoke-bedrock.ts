@@ -1,6 +1,6 @@
 // Live smoke test: one real Bedrock turn through the full stack (model -> MCP over HTTP -> engines).
-// Needs AWS credentials with bedrock-mantle access and a region where BEDROCK_MODEL_ID is available.
-//   AWS_REGION=us-east-1 BEDROCK_MODEL_ID=anthropic.claude-opus-5-5 pnpm --filter careos-server smoke:bedrock
+// Needs AWS credentials with Bedrock InvokeModel access and a region where BEDROCK_MODEL_ID is available.
+//   AWS_REGION=us-east-1 BEDROCK_MODEL_ID=us.amazon.nova-pro-v1:0 pnpm --filter careos-server smoke:bedrock
 import type { AddressInfo } from "node:net";
 import { CareService, MemoryAdapter, createSeed } from "open-caregiver-mcp";
 import { createApp } from "../src/app.js";

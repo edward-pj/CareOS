@@ -1,5 +1,5 @@
 import { guardReply } from "./guardrail.js";
-import type { ClaudeTool, ContentBlock, LlmClient, LlmMessage, TextBlock, ToolResultBlock, ToolUseBlock, TurnContext } from "./llm.js";
+import type { LlmTool, ContentBlock, LlmClient, LlmMessage, TextBlock, ToolResultBlock, ToolUseBlock, TurnContext } from "./llm.js";
 import type { ToolRunner } from "./mcpClient.js";
 
 export type TurnEventType = "assistant_delta" | "tool_call" | "tool_result" | "card" | "alert" | "error" | "done";
@@ -8,7 +8,7 @@ export type Emit = (type: TurnEventType, data: unknown) => void;
 export interface RunTurnOptions {
   llm: LlmClient;
   runner: ToolRunner;
-  tools: ClaudeTool[];
+  tools: LlmTool[];
   system: string;
   history: LlmMessage[];
   transcript: string;

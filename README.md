@@ -1,6 +1,6 @@
 # CareOS
 
-Ambient household clinical-safety OS, shown through a browser **Alexa+ simulator**. Deterministic dosing/safety engines are exposed over MCP; Claude on Amazon Bedrock handles language only (it parses the request and picks a tool).
+Ambient household clinical-safety OS, shown through a browser **Alexa+ simulator**. Deterministic dosing/safety engines are exposed over MCP; Amazon Nova on Amazon Bedrock handles language only (it parses the request and picks a tool).
 
 > Demo only — not a medical device.
 

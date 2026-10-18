@@ -1,8 +1,8 @@
-import type { ClaudeTool, LlmClient, LlmMessage } from "./llm.js";
+import type { LlmTool, LlmClient, LlmMessage } from "./llm.js";
 import type { ToolRunner } from "./mcpClient.js";
 import { runTurn, trimHistory } from "./loop.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
-import { toClaudeTools } from "./toolBridge.js";
+import { toLlmTools } from "./toolBridge.js";
 import { TurnStore } from "./turns.js";
 
 export interface ConverseRequest { session_id: string; active_profile: string; caregiver: string; transcript: string }
@@ -18,7 +18,7 @@ export interface OrchestratorOptions {
 /** Owns conversation sessions and turn event logs. One turn per session at a time. */
 export class Orchestrator {
   readonly turns = new TurnStore();
-  private tools: ClaudeTool[] = [];
+  private tools: LlmTool[] = [];
   private sessions = new Map<string, LlmMessage[]>();
   private busy = new Set<string>();
   private ready = false;
@@ -29,7 +29,7 @@ export class Orchestrator {
 
   /** Fetches the tool list from the MCP server and prepares it for the model. Call after the server is listening. */
   async init(): Promise<void> {
-    this.tools = toClaudeTools(await this.o.runner.listTools());
+    this.tools = toLlmTools(await this.o.runner.listTools());
     this.ready = true;
   }
 

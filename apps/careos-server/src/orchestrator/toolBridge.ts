@@ -1,11 +1,11 @@
-import type { ClaudeTool } from "./llm.js";
+import type { LlmTool } from "./llm.js";
 
 type Json = Record<string, any>;
 
 export interface McpToolDef { name: string; description?: string; inputSchema: Json }
 
 /**
- * Makes an MCP JSON schema acceptable to strict tool use: inlines $ref/$defs, collapses anyOf/oneOf of
+ * Makes an MCP JSON schema acceptable to the model's tool schema: inlines $ref/$defs, collapses anyOf/oneOf of
  * literals into a single enum, and closes every object with additionalProperties:false.
  * Anything it cannot express (a real union) throws, so a bad tool schema fails at startup, not mid-conversation.
  */
@@ -49,13 +49,12 @@ export function sanitizeSchema(schema: Json, where = "schema"): Json {
  */
 export const MODEL_HIDDEN_TOOLS = new Set(["override_lockout"]);
 
-export function toClaudeTools(tools: McpToolDef[]): ClaudeTool[] {
+export function toLlmTools(tools: McpToolDef[]): LlmTool[] {
   return tools
     .filter((t) => !MODEL_HIDDEN_TOOLS.has(t.name))
     .map((t) => ({
       name: t.name,
       description: t.description ?? t.name,
       input_schema: sanitizeSchema(t.inputSchema, `tool ${t.name}`),
-      strict: true as const,
     }));
 }

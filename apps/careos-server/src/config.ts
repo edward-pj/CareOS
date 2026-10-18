@@ -3,16 +3,20 @@ import { resolve } from "node:path";
 
 export interface Config {
   port: number;
-  storage: "memory" | "dynamo";
+  storage: "memory" | "dynamo" | "supabase";
   table: string;
   ddbEndpoint?: string;
   region: string;
   snsTopicArn?: string;
+  supabaseUrl?: string;
+  supabaseKey?: string;
   /** Browser origin to allow via CORS. Unset when the web app reaches the server through the Vite proxy (same origin). */
   allowedOrigin?: string;
   host: string;
-  llmMode: "mock" | "bedrock";
+  llmMode: "mock" | "bedrock" | "gemini";
   bedrockModelId: string;
+  geminiApiKey?: string;
+  geminiModelId: string;
   sseHeartbeatMs: number;
 }
 
@@ -35,26 +39,41 @@ function tryLoadEnv(): void {
   }
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  if (env === process.env) {
-    tryLoadEnv();
+export function loadConfig(env?: NodeJS.ProcessEnv): Config {
+  tryLoadEnv();
+  const activeEnv = env ? { ...process.env, ...env } : process.env;
+  const storage = (activeEnv.STORAGE ?? "memory") as Config["storage"];
+  if (storage !== "memory" && storage !== "dynamo" && storage !== "supabase") {
+    throw new Error(`STORAGE must be "memory", "dynamo", or "supabase", got "${storage}"`);
   }
-  const storage = (env.STORAGE ?? "memory") as Config["storage"];
-  if (storage !== "memory" && storage !== "dynamo") throw new Error(`STORAGE must be "memory" or "dynamo", got "${storage}"`);
-  const llmMode = (env.LLM_MODE ?? "mock") as Config["llmMode"];
-  if (llmMode !== "mock" && llmMode !== "bedrock") throw new Error(`LLM_MODE must be "mock" or "bedrock", got "${llmMode}"`);
+  if (storage === "supabase" && (!activeEnv.SUPABASE_URL || !activeEnv.SUPABASE_KEY)) {
+    throw new Error("SUPABASE_URL and SUPABASE_KEY are required when STORAGE=supabase");
+  }
+
+  const llmMode = (activeEnv.LLM_MODE ?? "mock") as Config["llmMode"];
+  if (llmMode !== "mock" && llmMode !== "bedrock" && llmMode !== "gemini") {
+    throw new Error(`LLM_MODE must be "mock", "bedrock", or "gemini", got "${llmMode}"`);
+  }
+  if (llmMode === "gemini" && !activeEnv.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is required when LLM_MODE=gemini");
+  }
+
   return {
     llmMode,
-    bedrockModelId: env.BEDROCK_MODEL_ID ?? "anthropic.claude-opus-5-5",
-    port: Number(env.PORT ?? 8787),
+    bedrockModelId: activeEnv.BEDROCK_MODEL_ID ?? "us.amazon.nova-pro-v1:0",
+    geminiApiKey: activeEnv.GEMINI_API_KEY || undefined,
+    geminiModelId: activeEnv.GEMINI_MODEL_ID ?? "gemini-3.8-flash",
+    port: Number(activeEnv.PORT ?? 8787),
     storage,
-    table: env.DDB_TABLE ?? "careos",
-    ddbEndpoint: env.DDB_ENDPOINT || undefined,
-    region: env.AWS_REGION ?? "us-east-1",
-    snsTopicArn: env.SNS_TOPIC_ARN || undefined,
-    allowedOrigin: env.ALLOWED_ORIGIN || undefined,
+    table: activeEnv.DDB_TABLE ?? "careos",
+    ddbEndpoint: activeEnv.DDB_ENDPOINT || undefined,
+    region: activeEnv.AWS_REGION ?? "us-east-1",
+    snsTopicArn: activeEnv.SNS_TOPIC_ARN || undefined,
+    supabaseUrl: activeEnv.SUPABASE_URL || undefined,
+    supabaseKey: activeEnv.SUPABASE_KEY || undefined,
+    allowedOrigin: activeEnv.ALLOWED_ORIGIN || undefined,
     // Loopback by default: the demo server is unauthenticated, so it should not listen on the LAN unless asked.
-    host: env.HOST ?? "127.0.0.1",
-    sseHeartbeatMs: Number(env.SSE_HEARTBEAT_MS ?? 25_000),
+    host: activeEnv.HOST ?? "127.0.0.1",
+    sseHeartbeatMs: Number(activeEnv.SSE_HEARTBEAT_MS ?? 25_000),
   };
 }
