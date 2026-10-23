@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { api, ApiError, followTurn } from "../api/client";
-import { conversationReducer, initialConversation, parseShiftSwitch, type ConversationState } from "../lib/conversation";
+import { conversationReducer, initialConversation, parseShiftSwitch, spokenText, type ConversationState } from "../lib/conversation";
 
 const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
@@ -15,6 +15,8 @@ function failureMessage(e: unknown): string {
 
 export interface Conversation extends ConversationState {
   send: (text: string) => Promise<void>;
+  /** Shows a result the screen fetched itself (e.g. a photo read) as the active card, and speaks its `speech`. */
+  showPayload: (userText: string, payload: Record<string, unknown>) => void;
 }
 
 interface Options {
@@ -57,7 +59,7 @@ export function useConversation({ activeProfile, caregiver, caregivers, onSwitch
             turn_id,
             (event) => {
               dispatch({ type: "turn_event", turnId: turn_id, event });
-              if (event.type === "assistant_delta") onReply?.(event.data.text);
+              if (event.type === "assistant_delta") onReply?.(spokenText(event.data));
               if (event.type === "done") resolve();
             },
             reject,
@@ -72,5 +74,11 @@ export function useConversation({ activeProfile, caregiver, caregivers, onSwitch
     [activeProfile, caregiver, caregivers, onReply, onSwitchCaregiver, sessionId],
   );
 
-  return { ...state, send };
+  const showPayload = useCallback((userText: string, payload: Record<string, unknown>) => {
+    dispatch({ type: "show_payload", userId: `u-${newId()}`, userText, replyId: `a-${newId()}`, payload });
+    const speech = typeof payload.speech === "string" ? payload.speech : "";
+    if (speech) onReply?.(typeof payload.followup === "string" ? `${speech} ${payload.followup}` : speech);
+  }, [onReply]);
+
+  return { ...state, send, showPayload };
 }

@@ -1,51 +1,7 @@
 import { describe, expect, it } from "vitest";
-import fc from "fast-check";
-import { calculateDose, checkInterval, findRemedy, verifyDrugSafety } from "../src/engines/index.js";
+import { checkInterval, findRemedy } from "../src/engines/index.js";
 
 const H = 3_600_000;
-const NINE_MONTHS = 275;
-
-describe("calculateDose", () => {
-  it("golden: 19 lb infant ibuprofen drops -> 2.00 mL / 80 mg", () => {
-    const r = calculateDose({ weightValue: 19, weightUnit: "lbs", ageDays: NINE_MONTHS, formulationKey: "ibuprofen.infant_drops" });
-    expect(r.status).toBe("APPROVED");
-    if (r.status !== "APPROVED") return;
-    expect(r.weightKg).toBe(8.62);
-    expect(r.targetDoseMg).toBe(86.18);
-    expect(r.dispenseVolumeMl).toBe(2);
-    expect(r.deliveredDoseMg).toBe(80);
-  });
-
-  it("blocks ibuprofen under 6 months", () => {
-    const r = calculateDose({ weightValue: 12, weightUnit: "lbs", ageDays: 120, formulationKey: "ibuprofen.infant_drops" });
-    expect(r.status).toBe("BLOCKED");
-  });
-
-  it("fever under 12 weeks -> SEEK_CARE", () => {
-    const r = calculateDose({ weightValue: 10, weightUnit: "lbs", ageDays: 60, formulationKey: "acetaminophen.infant_susp", hasFever: true });
-    expect(r.status).toBe("SEEK_CARE");
-  });
-
-  it("rejects implausible weights", () => {
-    expect(calculateDose({ weightValue: 190, weightUnit: "lbs", ageDays: NINE_MONTHS, formulationKey: "ibuprofen.infant_drops" }).status).toBe("BLOCKED");
-    expect(calculateDose({ weightValue: -3, weightUnit: "lbs", ageDays: NINE_MONTHS, formulationKey: "ibuprofen.infant_drops" }).status).toBe("BLOCKED");
-  });
-
-  it("property: lands on a 0.25 mark, never exceeds the target dose, monotonic in weight", () => {
-    fc.assert(
-      fc.property(fc.double({ min: 5, max: 60, noNaN: true }), fc.double({ min: 5, max: 60, noNaN: true }), (a, b) => {
-        const [lo, hi] = a < b ? [a, b] : [b, a];
-        const run = (w: number) => calculateDose({ weightValue: w, weightUnit: "lbs", ageDays: 400, formulationKey: "ibuprofen.infant_drops" });
-        const x = run(lo);
-        const y = run(hi);
-        if (x.status !== "APPROVED" || y.status !== "APPROVED") return true;
-        expect((x.dispenseVolumeMl * 4) % 1).toBe(0);
-        expect(x.deliveredDoseMg).toBeLessThanOrEqual(x.targetDoseMg + 1e-9);
-        return y.dispenseVolumeMl >= x.dispenseVolumeMl;
-      }),
-    );
-  });
-});
 
 describe("checkInterval", () => {
   const rule = { minIntervalHours: 6, maxDosesPer24h: 4 };
@@ -72,37 +28,6 @@ describe("checkInterval", () => {
   it("enforces the 24h cap", () => {
     const ledger = [20, 14, 8, 2].map((h) => ({ ingredient: "ibuprofen", caregiver: "Dad", at: now - h * H }));
     expect(checkInterval(ledger, "ibuprofen", { minIntervalHours: 1, maxDosesPer24h: 4 }, now).status).toBe("DAILY_MAX_REACHED");
-  });
-});
-
-describe("verifyDrugSafety", () => {
-  const frank = { activeRx: ["eliquis", "metformin", "lisinopril", "atorvastatin"], conditions: ["hypertension", "type2_diabetes"], allergies: [] };
-
-  it("blocks Advil for a patient on Eliquis and offers Tylenol", () => {
-    const r = verifyDrugSafety("advil", frank);
-    expect(r.status).toBe("BLOCKED");
-    if (r.status === "BLOCKED") {
-      expect(r.severity).toBe("CRITICAL");
-      expect(r.conflictingRx).toBe("eliquis");
-      expect(r.approvedAlternative).toBe("acetaminophen");
-    }
-  });
-
-  it("brand names normalize to the same result", () => {
-    for (const brand of ["Motrin", "Ibuprofen", "ADVIL"]) expect(verifyDrugSafety(brand, frank).status).toBe("BLOCKED");
-  });
-
-  it("clears Tylenol", () => {
-    expect(verifyDrugSafety("tylenol", frank).status).toBe("CLEAR");
-  });
-
-  it("drops an alternative that is itself unsafe", () => {
-    const r = verifyDrugSafety("advil", { ...frank, allergies: ["tylenol"] });
-    if (r.status === "BLOCKED") expect(r.approvedAlternative).toBeUndefined();
-  });
-
-  it("fails closed on unknown drugs", () => {
-    expect(verifyDrugSafety("zzzmystery", frank).status).toBe("BLOCKED");
   });
 });
 

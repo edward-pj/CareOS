@@ -5,3 +5,4 @@ dist
 coverage
 .tools
 dynamodb-local-metadata.json
+.claude

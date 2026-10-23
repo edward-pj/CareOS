@@ -9,6 +9,9 @@
       ],
       "open-caregiver-mcp/http": [
         "../../packages/open-caregiver-mcp/src/http.ts"
+      ],
+      "open-caregiver-mcp/testing": [
+        "../../packages/open-caregiver-mcp/src/testing/storageContract.ts"
       ]
     }
   },

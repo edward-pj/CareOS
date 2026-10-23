@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BedrockLlm } from "../src/orchestrator/bedrock.js";
-import { guardReply, numbersIn, SAFE_FALLBACK, unbackedAmounts } from "../src/orchestrator/guardrail.js";
+import { FAIL_CLOSED_MESSAGE } from "open-caregiver-mcp";
+import { allowedAmounts, amountsIn, guardReply, kindOf, latestSpeech, SAFE_FALLBACK, unbackedAmounts, wordsToNumber } from "../src/orchestrator/guardrail.js";
 import type { LlmClient, LlmMessage, LlmRequest, LlmResponse } from "../src/orchestrator/llm.js";
 import { runTurn, trimHistory, type TurnEventType } from "../src/orchestrator/loop.js";
 import type { ToolOutcome, ToolRunner } from "../src/orchestrator/mcpClient.js";
@@ -32,40 +33,95 @@ describe("toolBridge.sanitizeSchema", () => {
     expect(() => sanitizeSchema({ $ref: "#/$defs/A", $defs: { A: { type: "object", properties: { a: { $ref: "#/$defs/A" } } } } })).toThrow(/\$ref/);
   });
 
-  it("never offers override_lockout to the model", () => {
+  it("offers every server tool to the model", () => {
     const tools = toLlmTools([
-      { name: "override_lockout", inputSchema: { type: "object", properties: { pin: { type: "string" } } } },
-      { name: "verify_medication_safety", inputSchema: { type: "object", properties: {} } },
+      { name: "plan_medication", inputSchema: { type: "object", properties: {} } },
+      { name: "confirm_dose_given", inputSchema: { type: "object", properties: {} } },
     ]);
-    expect(tools.map((t) => t.name)).toEqual(["verify_medication_safety"]);
+    expect(tools.map((t) => t.name)).toEqual(["plan_medication", "confirm_dose_given"]);
   });
 });
 
-describe("guardrail", () => {
-  const results = [{ status: "APPROVED", dispense_volume_ml: 2, delivered_dose_mg: 80, formulation_label: "Infant drops 50 mg/1.25 mL" }];
+describe("guardrail (Numeric Guard, PRD §4.4)", () => {
+  const results = [{ status: "APPROVED", dispense_volume_ml: 1.875, delivered_dose_mg: 75, formulation_label: "Infants' Motrin 50 mg / 1.25 mL", lockout_hours: 6, remaining_minutes: 342, speech: "Stop. Sarah gave it 18 minutes ago, so the next dose is allowed in 5 hours and 42 minutes.", read_verbatim: true }];
 
-  it("collects numbers from tool results", () => {
-    expect(numbersIn(results)).toEqual(expect.arrayContaining([2, 80, 50, 1.25]));
+  it("collects what the tool results back, by kind of unit: from field names and from amounts written inside speech", () => {
+    const a = allowedAmounts(results);
+    expect(a.volume).toEqual(expect.arrayContaining([1.875, 1.25]));
+    expect(a.mass).toEqual(expect.arrayContaining([75, 50]));
+    expect(a.time).toEqual(expect.arrayContaining([6, 342, 18, 5, 42, 360]));
+    expect(a.volume).not.toContain(75);
+    expect(a.mass).not.toContain(1.875);
   });
 
   it("allows amounts that a tool returned, regardless of formatting", () => {
-    expect(unbackedAmounts("Give 2.00 mL (80 mg).", results)).toEqual([]);
-    expect(unbackedAmounts("Give 2 milliliters.", results)).toEqual([]);
+    expect(unbackedAmounts("Give 1.875 mL (75 mg).", results)).toEqual([]);
+    expect(unbackedAmounts("Give 1.875 milliliters.", results)).toEqual([]);
+    expect(unbackedAmounts("Wait 18 minutes, about 6 hours in all.", results)).toEqual([]);
   });
 
   it("replaces a reply that states an amount no tool returned", () => {
-    const g = guardReply("Give 3 mL to be safe.", results);
-    expect(g.replaced).toBe(true);
-    expect(g.text).toBe(SAFE_FALLBACK);
-    expect(g.offending).toEqual(["3 mL"]);
+    const g = guardReply("Give 3 mL to be safe.", [{ dispense_volume_ml: 1.875 }]);
+    expect(g).toMatchObject({ replaced: true, text: SAFE_FALLBACK, offending: ["3 mL"], draft: "Give 3 mL to be safe." });
   });
 
-  it("does not police non-dose numbers", () => {
-    expect(guardReply("Wait 45 minutes.", [])).toMatchObject({ replaced: false });
+  it("polices every unit, not just mg and mL: time, temperature, weight and counts", () => {
+    for (const bad of ["Wait 3 hours.", "Give it in 20 minutes.", "He has a 104 degrees fever.", "His fever is 104 °F.", "Give 2 caplets.", "At 30 pounds that is fine.", "Use 4 mg.", "Give 2 tsp."]) {
+      expect(guardReply(bad, [{ status: "OK" }]).replaced, bad).toBe(true);
+    }
   });
 
-  it("with no tool results, any dose amount is unbacked", () => {
+  it("polices spelled-out numbers too, so 'two milliliters' cannot sneak past", () => {
+    expect(guardReply("Give two milliliters.", [{ dispense_volume_ml: 1.875 }])).toMatchObject({ replaced: true, offending: ["two milliliters"] });
+    expect(guardReply("Give one point eight seven five milliliters.", [{ dispense_volume_ml: 1.875 }]).replaced).toBe(false);
+    expect(guardReply("Wait five hours and forty two minutes.", results).replaced).toBe(false);
+    expect(guardReply("Wait six hours and fifty minutes.", results)).toMatchObject({ replaced: true }); // 50 exists, but as milligrams
+  });
+
+  it("is unit-aware: the mg/mL mix-up is caught even though the number exists in the results", () => {
+    const r = [{ delivered_dose_mg: 75, dispense_volume_ml: 1.875 }];
+    expect(guardReply("Give 75 mL.", r)).toMatchObject({ replaced: true, offending: ["75 mL"] });
+    expect(guardReply("Give 1.875 mg.", r)).toMatchObject({ replaced: true, offending: ["1.875 mg"] });
+    expect(guardReply("Give 75 mg.", r).replaced).toBe(false);
+    expect(guardReply("Give 1.875 mL.", r).replaced).toBe(false);
+    expect(guardReply("Wait 75 minutes.", r).replaced).toBe(true);
+    expect(guardReply("He weighs 75 pounds.", r).replaced).toBe(true);
+  });
+
+  it("allows whole-number time conversions of what a tool said (360 minutes is 6 hours)", () => {
+    expect(guardReply("It unlocks in 6 hours.", [{ remaining_minutes: 360 }]).replaced).toBe(false);
+    expect(guardReply("It unlocks in 360 minutes.", [{ lockout_hours: 6 }]).replaced).toBe(false);
+    expect(guardReply("It unlocks in 5 hours.", [{ remaining_minutes: 342 }]).replaced).toBe(true); // 5.7 hours is not 5
+  });
+
+  it("classifies units", () => {
+    expect([kindOf("mL"), kindOf("milligrams"), kindOf("hours"), kindOf("pounds"), kindOf("caplets"), kindOf("degrees"), kindOf("°F")]).toEqual(["volume", "mass", "time", "weight", "count", "temperature", "temperature"]);
+  });
+
+  it("does not police numbers that carry no unit", () => {
+    expect(guardReply("Call 911 if it gets worse. Option 2 is on the screen.", [])).toMatchObject({ replaced: false });
+  });
+
+  it("with no tool results, any dose or time with a unit is unbacked", () => {
     expect(guardReply("Give 5 mL.", []).replaced).toBe(true);
+    expect(guardReply("Wait 45 minutes.", []).replaced).toBe(true);
+  });
+
+  it("when a draft is replaced and a tool had verbatim speech, THAT speech is what gets said", () => {
+    const g = guardReply("Give 3 mL.", results);
+    expect(g.text).toBe(results[0]!.speech);
+    expect(latestSpeech(results)).toBe(results[0]!.speech);
+    expect(latestSpeech([{ speech: "x" }])).toBeUndefined(); // only read_verbatim speech counts
+  });
+
+  it("parses number words", () => {
+    expect(wordsToNumber(["one", "point", "eight", "seven", "five"])).toBe(1.875);
+    expect(wordsToNumber(["twenty-five"])).toBe(25);
+    expect(wordsToNumber(["one", "hundred", "and", "five"])).toBe(105);
+    expect(wordsToNumber(["three", "thousand"])).toBe(3000);
+    expect(wordsToNumber(["point"])).toBeUndefined();
+    expect(wordsToNumber(["milk"])).toBeUndefined();
+    expect(amountsIn("two caplets and 1000 milligrams").map((x) => x.value)).toEqual([1000, 2]);
   });
 });
 
@@ -99,7 +155,7 @@ describe("runTurn", () => {
   it("runs tools, emits the card before the reply, and ends with exactly one done", async () => {
     const { events, emit } = collect();
     const llm = new Scripted([
-      { content: [tool("a", "calculate_pediatric_dose")], stopReason: "tool_use" },
+      { content: [tool("a", "plan_medication")], stopReason: "tool_use" },
       text("Give 2 mL."),
     ]);
     const hist = await runTurn({
@@ -134,16 +190,69 @@ describe("runTurn", () => {
 
   it("raises an alert for blocking statuses", async () => {
     const { events, emit } = collect();
-    const llm = new Scripted([{ content: [tool("a", "verify_medication_safety")], stopReason: "tool_use" }, text("Blocked.")]);
+    const llm = new Scripted([{ content: [tool("a", "plan_medication")], stopReason: "tool_use" }, text("Blocked.")]);
     await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => outcome({ status: "BLOCKED", violation_type: "DOUBLE_DOSE_LOCKED", card_type: "DOUBLE_DOSE_INTERCEPT" })) });
     expect(events.find((e) => e.type === "alert")!.data).toMatchObject({ kind: "BLOCKED", violation_type: "DOUBLE_DOSE_LOCKED" });
   });
 
-  it("survives a throwing tool and reports it to the model as an error result", async () => {
-    const { emit } = collect();
-    const llm = new Scripted([{ content: [tool("a", "x")], stopReason: "tool_use" }, text("Sorry.")]);
-    const hist = await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => { throw new Error("boom"); }) });
-    expect(JSON.stringify(hist[2])).toContain("Tool failed: boom");
+  it("S2: a throwing tool fails closed. The model is not asked to improvise, and the detail never reaches it", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([{ content: [tool("a", "plan_medication")], stopReason: "tool_use" }, text("Probably about 5 mL is fine.")]);
+    const hist = await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => { throw new Error("boom: db.internal:5432"); }) });
+    expect(llm.calls).toHaveLength(1); // no second model call
+    expect(events.find((e) => e.type === "assistant_delta")!.data.text).toBe(FAIL_CLOSED_MESSAGE);
+    expect(events.some((e) => e.type === "error")).toBe(true);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    expect(JSON.stringify(hist)).not.toMatch(/boom|5432/);
+  });
+
+  it("S2: a tool that reports isError fails closed the same way", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([{ content: [tool("a", "plan_medication")], stopReason: "tool_use" }, text("Give 5 mL.")]);
+    await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => outcome({ message: "x" }, true)) });
+    expect(events.find((e) => e.type === "assistant_delta")!.data.text).toBe(FAIL_CLOSED_MESSAGE);
+    expect(llm.calls).toHaveLength(1);
+  });
+
+  it("read_verbatim: the reply IS the tool's speech (plus its follow-up) and the model is not asked to rephrase it", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([{ content: [tool("a", "plan_medication")], stopReason: "tool_use" }, text("Give 2 mL, that should be fine.")]);
+    const hist = await runTurn({
+      ...base, llm, emit, history: [], transcript: "t",
+      runner: runner(() => outcome({ status: "APPROVED", card_type: "SYRINGE_CALIBRATOR", speech: "Leo can have 1.875 milliliters of Infants' Motrin.", followup: "Tell me once you've given it.", read_verbatim: true })),
+    });
+    expect(llm.calls).toHaveLength(1);
+    expect(events.map((e) => e.type)).toEqual(["tool_call", "tool_result", "card", "assistant_delta", "done"]);
+    expect(events.find((e) => e.type === "assistant_delta")!.data).toEqual({ text: "Leo can have 1.875 milliliters of Infants' Motrin.", verbatim: true, followup: "Tell me once you've given it." });
+    // History records what was actually said, so the next turn builds on it (not on a model paraphrase).
+    expect(JSON.stringify(hist.at(-1))).toContain("Leo can have 1.875 milliliters");
+    expect(JSON.stringify(hist)).not.toContain("2 mL");
+  });
+
+  it("two verbatim results in one step are both spoken, in order", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([{ content: [tool("a", "log_observation"), tool("b", "plan_medication")], stopReason: "tool_use" }]);
+    await runTurn({
+      ...base, llm, emit, history: [], transcript: "t",
+      runner: runner((n) => outcome({ status: "OK", card_type: null, speech: n === "log_observation" ? "Logged weight." : "Leo can have 1.875 milliliters.", read_verbatim: true })),
+    });
+    expect(events.find((e) => e.type === "assistant_delta")!.data.text).toBe("Logged weight. Leo can have 1.875 milliliters.");
+  });
+
+  it("a non-verbatim result still goes back to the model, whose reply is guarded", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([{ content: [tool("a", "get_household_context")], stopReason: "tool_use" }, text("Leo needs 9 mL.")]);
+    await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => outcome({ status: "OK", card_type: null })) });
+    expect(llm.calls).toHaveLength(2);
+    expect(events.find((e) => e.type === "numeric_guard")!.data).toMatchObject({ kind: "numeric_guard.blocked", offending: ["9 mL"], draft: "Leo needs 9 mL.", replacement: SAFE_FALLBACK });
+  });
+
+  it("a guard trip is logged as a numeric_guard event with the draft and what replaced it", async () => {
+    const { events, emit } = collect();
+    const llm = new Scripted([text("Give 7 mL.")]);
+    await runTurn({ ...base, llm, emit, history: [], transcript: "t", runner: runner(() => outcome({})) });
+    expect(events.map((e) => e.type)).toEqual(["numeric_guard", "alert", "assistant_delta", "done"]);
+    expect(events[0]!.data).toEqual({ kind: "numeric_guard.blocked", offending: ["7 mL"], draft: "Give 7 mL.", replacement: SAFE_FALLBACK });
   });
 
   it("on model failure: error event, safe reply, one done, and history is not corrupted", async () => {
@@ -152,6 +261,7 @@ describe("runTurn", () => {
     const hist = await runTurn({ ...base, llm: new Scripted([]), emit, history: prior, transcript: "t", runner: runner(() => outcome({})) });
     expect(hist).toBe(prior);
     expect(events.map((e) => e.type)).toEqual(["error", "assistant_delta", "done"]);
+    expect(events[1]!.data.text).toBe(FAIL_CLOSED_MESSAGE);
   });
 
   it("stops a runaway tool loop", async () => {

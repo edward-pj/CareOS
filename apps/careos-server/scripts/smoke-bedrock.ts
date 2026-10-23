@@ -4,6 +4,7 @@
 import type { AddressInfo } from "node:net";
 import { CareService, MemoryAdapter, createSeed } from "open-caregiver-mcp";
 import { createApp } from "../src/app.js";
+import { singleTenant } from "../src/tenants.js";
 import { loadConfig } from "../src/config.js";
 import { BedrockLlm } from "../src/orchestrator/bedrock.js";
 import { Orchestrator } from "../src/orchestrator/index.js";
@@ -14,7 +15,7 @@ const storage = new MemoryAdapter(createSeed(Date.now()));
 const service = new CareService(storage);
 const mcp = new McpToolClient();
 const orchestrator = new Orchestrator({ llm: new BedrockLlm({ region: cfg.region, modelId: cfg.bedrockModelId }), runner: mcp });
-const { app } = createApp({ service, storage, orchestrator });
+const { app } = createApp({ tenants: singleTenant(service), orchestrator });
 const server = app.listen(0);
 await new Promise((r) => server.once("listening", r));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

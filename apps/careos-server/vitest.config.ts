@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: /^open-caregiver-mcp\/http$/, replacement: pkg("http.ts") },
+      { find: /^open-caregiver-mcp\/testing$/, replacement: pkg("testing/storageContract.ts") },
       { find: /^open-caregiver-mcp$/, replacement: pkg("server.ts") },
     ],
   },

@@ -7,9 +7,16 @@ import { TurnStore } from "./turns.js";
 
 export interface ConverseRequest { session_id: string; active_profile: string; caregiver: string; transcript: string }
 
+/** Who is speaking: scopes the session and turn to a household and makes tool calls run as that caller. */
+export interface Caller { householdId: string; bearer?: string }
+const DEFAULT_CALLER: Caller = { householdId: "demo" };
+
 export interface OrchestratorOptions {
   llm: LlmClient;
+  /** Default runner: used to discover tools at boot and for callers without their own. */
   runner: ToolRunner;
+  /** Per-caller runner (one MCP connection per bearer token) so tool calls act as the caller's household. */
+  runnerFor?: (bearer: string | undefined) => Promise<ToolRunner>;
   now?: () => number;
   maxHistoryTurns?: number;
   maxSessions?: number;
@@ -35,31 +42,40 @@ export class Orchestrator {
 
   get toolNames(): string[] { return this.tools.map((t) => t.name); }
 
-  start(req: ConverseRequest): { turnId: string } | "busy" {
-    if (this.busy.has(req.session_id)) return "busy";
-    this.busy.add(req.session_id);
-    const turnId = this.turns.create();
-    void this.run(turnId, req);
+  start(req: ConverseRequest, caller: Caller = DEFAULT_CALLER): { turnId: string } | "busy" {
+    // Session ids are chosen by the client, so namespace them: one household can never join another's conversation.
+    const sessionKey = `${caller.householdId}:${req.session_id}`;
+    if (this.busy.has(sessionKey)) return "busy";
+    this.busy.add(sessionKey);
+    const turnId = this.turns.create(caller.householdId);
+    void this.run(turnId, req, sessionKey, caller);
     return { turnId };
   }
 
-  private async run(turnId: string, req: ConverseRequest): Promise<void> {
+  private async run(turnId: string, req: ConverseRequest, sessionKey: string, caller: Caller): Promise<void> {
     const now = (this.o.now ?? Date.now)();
     const context = { turnId, activeProfile: req.active_profile, caregiver: req.caregiver, nowIso: new Date(now).toISOString() };
     try {
+      const runner = this.o.runnerFor ? await this.o.runnerFor(caller.bearer) : this.o.runner;
       const history = await runTurn({
         llm: this.o.llm,
-        runner: this.o.runner,
+        runner,
         tools: this.tools,
         system: buildSystemPrompt(context),
-        history: this.sessions.get(req.session_id) ?? [],
+        history: this.sessions.get(sessionKey) ?? [],
         transcript: req.transcript,
         context,
         emit: (type, data) => this.turns.append(turnId, type, data),
       });
-      this.remember(req.session_id, trimHistory(history, this.o.maxHistoryTurns ?? 10));
+      this.remember(sessionKey, trimHistory(history, this.o.maxHistoryTurns ?? 10));
+    } catch (e) {
+      // Connecting to the tool server failed before the turn could start: report it instead of leaving the turn open.
+      console.error("turn failed before start:", e);
+      this.turns.append(turnId, "error", { message: "Could not reach the safety tools" });
+      this.turns.append(turnId, "assistant_delta", { text: "Sorry, something went wrong. Please try again." });
+      this.turns.append(turnId, "done", {});
     } finally {
-      this.busy.delete(req.session_id);
+      this.busy.delete(sessionKey);
     }
   }
 

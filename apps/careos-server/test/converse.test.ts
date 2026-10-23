@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CareService, MemoryAdapter, MemoryNotifier, createSeed } from "open-caregiver-mcp";
 import { createApp } from "../src/app.js";
+import { singleTenant } from "../src/tenants.js";
 import type { LlmClient, LlmResponse } from "../src/orchestrator/llm.js";
 import { Orchestrator } from "../src/orchestrator/index.js";
 import { McpToolClient } from "../src/orchestrator/mcpClient.js";
@@ -17,10 +18,10 @@ let mcp: McpToolClient;
 beforeAll(async () => {
   const storage = new MemoryAdapter(createSeed(Date.now()));
   notifier = new MemoryNotifier();
-  const service = new CareService(storage, { notifier, overridePin: "4242" });
+  const service = new CareService(storage, { notifier });
   mcp = new McpToolClient();
   orchestrator = new Orchestrator({ llm: new MockLlm(), runner: mcp });
-  const { app } = createApp({ service, storage, orchestrator, sseHeartbeatMs: 60 });
+  const { app } = createApp({ tenants: singleTenant(service), orchestrator, sseHeartbeatMs: 60 });
   server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -55,41 +56,116 @@ async function say(transcript: string, o: { session?: string; profile?: string; 
 beforeEach(async () => { await reset(); notifier.sent.length = 0; });
 
 describe("demo flows (mock model, real MCP hop)", () => {
-  it("exposes the model-safe tool set only", () => {
+  it("exposes the new tool set", () => {
     expect(orchestrator.toolNames.sort()).toEqual([
-      "calculate_pediatric_dose", "confirm_amazon_order", "log_administration_event",
-      "query_pantry_remedies", "stage_amazon_cart", "verify_medication_safety",
+      "cancel_amazon_order", "confirm_amazon_order", "confirm_dose_given", "emergency_assist", "export_care_summary", "forget_patient",
+      "get_household_context", "log_observation", "manage_prescriptions", "plan_medication", "query_pantry_remedies", "read_bottle_label",
+      "stage_amazon_cart", "track_amazon_order", "triage_symptoms",
     ]);
   });
 
-  it("1. Leo 19 lb fever -> syringe card, 2 mL / 80 mg, spoken verbatim, no guardrail trip", async () => {
-    const t = await say("Leo is 19 pounds and has a fever, how much Motrin?");
-    expect(t.done).toBe(true);
+  it("C1. fever + Motrin: first the S3 question, then 1.875 mL from the label, spoken verbatim, no guard trip", async () => {
+    const s = `c1-${++n}`;
+    const ask = await say("Leo is 19 pounds and has a fever, how much Motrin?", { session: s });
+    expect(ask.done).toBe(true);
+    expect(ask.cards[0]).toMatchObject({ card_type: "NEEDS_INFO", tool: "plan_medication" });
+    expect(ask.reply).toBe("Has Leo had any ibuprofen today, like Motrin or Advil, even if it wasn't logged here?");
+    expect(ask.alerts).toEqual([]); // a question is not an alarm
+
+    const t = await say("No, nothing else today", { session: s });
     expect(t.cards).toHaveLength(1);
-    expect(t.cards[0]).toMatchObject({ card_type: "SYRINGE_CALIBRATOR", tool: "calculate_pediatric_dose" });
-    expect(t.cards[0].payload).toMatchObject({ status: "APPROVED", dispense_volume_ml: 2, delivered_dose_mg: 80 });
-    expect(t.reply).toMatch(/2 mL/);
-    expect(t.reply).toMatch(/80 mg/);
-    expect(t.alerts.find((a) => a.kind === "GUARDRAIL_REPLACED")).toBeUndefined();
+    expect(t.cards[0]).toMatchObject({ card_type: "SYRINGE_CALIBRATOR", tool: "plan_medication" });
+    expect(t.cards[0].payload).toMatchObject({ status: "APPROVED", dispense_volume_ml: 1.875, delivered_dose_mg: 75, mg_per_kg: 8.7 });
+    expect(t.reply).toBe("Leo can have 1.875 milliliters of Infants' Motrin. That is one point eight seven five milliliters.");
+    expect(t.events.find((e) => e.type === "assistant_delta")!.data).toMatchObject({ verbatim: true, followup: expect.stringContaining("syringe that came in the box") });
+    expect(t.events.some((e) => e.type === "numeric_guard")).toBe(false);
+    // The weight she said was saved with a date.
+    const state = await (await fetch(`${base}/api/state`)).json();
+    expect(state.patients.find((p: any) => p.profile.id === "leo").profile.weightLbs).toBe(19);
   });
 
-  it("2. Dad logs a dose 32 min after Sarah -> intercept card, SMS-style alert, nothing recorded", async () => {
+  it("C2. Dad tries to log a dose 32 min after Sarah -> Intercept card, alert to the house, nothing recorded", async () => {
     await reset(32);
-    const t = await say("I gave Leo 2 mL of Motrin", { caregiver: "Dad" });
+    const t = await say("I gave Leo Motrin", { caregiver: "Dad" });
     expect(t.cards[0]).toMatchObject({ card_type: "DOUBLE_DOSE_INTERCEPT" });
-    expect(t.cards[0].payload.last_dose).toMatchObject({ caregiver: "Sarah (Mom)", minutes_ago: 32 });
-    expect(t.alerts.some((a) => a.kind === "BLOCKED" && a.violation_type === "DOUBLE_DOSE_LOCKED")).toBe(true);
-    expect(t.reply).toMatch(/Sarah \(Mom\) gave/);
-    expect(notifier.sent.some((s) => s.kind === "LOCKOUT_ATTEMPT")).toBe(true);
+    expect(t.cards[0].payload).toMatchObject({ status: "REJECTED_LOCKED", remaining_minutes: 328 });
+    expect(t.cards[0].payload.last_dose).toMatchObject({ caregiver: "Sarah (Mom)", minutes_ago: 32, volume_ml: 1.875 });
+    expect(t.alerts.some((a) => a.kind === "REJECTED_LOCKED" && a.violation_type === "DOUBLE_DOSE_LOCKED")).toBe(true);
+    expect(t.reply).toBe("Stop. Sarah gave Infants' Motrin 32 minutes ago, so the next dose is allowed in 5 hours and 28 minutes.");
+    expect(notifier.sent.some((s) => s.kind === "LOCKOUT_ATTEMPT" && s.text.includes("Dad tried to log"))).toBe(true);
     expect(notifier.sent.some((s) => s.kind === "DOSE_LOGGED")).toBe(false);
+    const state = await (await fetch(`${base}/api/state`)).json();
+    expect(state.patients.find((p: any) => p.profile.id === "leo").medication_history).toHaveLength(1); // only Sarah's
   });
 
-  it("3. 'Can Frank take Advil?' -> contraindication shield with the Tylenol alternative", async () => {
+  it("E1. 'Can Frank take Advil?' -> Contraindication Shield, with a label-limited alternative and 'check with his clinician'", async () => {
     const t = await say("Can Frank take Advil?", { profile: "frank" });
     expect(t.cards[0]).toMatchObject({ card_type: "CONTRAINDICATION_SHIELD" });
-    expect(t.cards[0].payload).toMatchObject({ status: "BLOCKED", violation_type: "DRUG_CONTRAINDICATION" });
-    expect(t.reply).toMatch(/Blocked/);
-    expect(t.reply.toLowerCase()).toMatch(/acetaminophen|tylenol/);
+    expect(t.cards[0].payload).toMatchObject({ status: "ALTERNATE_SUGGESTED", rule_id: "SR-NSAID-ANTICOAGULANT", approved_alternative: "acetaminophen" });
+    expect(t.alerts.some((a) => a.kind === "ALTERNATE_SUGGESTED")).toBe(true);
+    expect(t.reply).toMatch(/can't clear advil for Frank/i);
+    const spoken = t.events.find((e) => e.type === "assistant_delta")!.data;
+    expect(spoken.followup).toMatch(/no more than 6 caplets in 24 hours/);
+    expect(spoken.followup).toMatch(/check with Frank's clinician/);
+  });
+
+  it("E2. 'What did the doctor say about Frank's gout?' -> Memory Conflict: old advice is not repeated", async () => {
+    const t = await say("What did the doctor say last time about Frank's gout?", { profile: "frank" });
+    expect(t.cards[0]).toMatchObject({ card_type: "MEMORY_CONFLICT", tool: "get_household_context" });
+    expect(t.cards[0].payload).toMatchObject({ status: "MEMORY_CONFLICT", call_target: "Dr. Rao" });
+    expect(t.reply).toBe("Dr. Rao's August advice was naproxen, but Frank now takes eliquis, so it's no longer safe. Please call Dr. Rao before giving it.");
+    expect(t.reply).not.toMatch(/with food/);
+    expect(t.alerts.some((a) => a.kind === "MEMORY_CONFLICT")).toBe(true);
+  });
+
+  it("D1. 'Does Frank have diabetes?' -> yes, from his record; 'Does Leo have diabetes?' -> no record, never a guess", async () => {
+    const frank = await say("Does Frank have diabetes?", { session: `d1-${++n}`, profile: "frank" });
+    expect(frank.done).toBe(true);
+    expect(frank.reply).toBe("Yes. Frank has type 2 diabetes on record.");
+    expect(frank.alerts).toEqual([]);
+
+    const leo = await say("Does Leo have diabetes?", { session: `d1-${++n}`, profile: "leo" });
+    expect(leo.reply).toBe("No. There is no diabetes on Leo's record.");
+  });
+
+  it("H2. a dose is logged only after the read-back and a clear yes; then the bottle drops and the house is alerted", async () => {
+    const s = `h2-${++n}`;
+    const readBack = await say("I gave Leo Motrin", { session: s });
+    expect(readBack.cards[0]).toMatchObject({ card_type: "CONFIRM_DOSE" });
+    expect(readBack.reply).toBe("Logging 1.875 milliliters of Infants' Motrin for Leo, given by Sarah just now. Is that correct?");
+    expect(notifier.sent).toEqual([]);
+    expect((await (await fetch(`${base}/api/state`)).json()).patients.find((p: any) => p.profile.id === "leo").medication_history).toHaveLength(0);
+
+    const logged = await say("yes that's right", { session: s });
+    expect(logged.cards).toHaveLength(0);
+    expect(logged.reply).toMatch(/^Logged\. The next Infants' Motrin for Leo is allowed after /);
+    expect(notifier.sent.some((x) => x.kind === "DOSE_LOGGED" && x.text.includes("1.875 mL Infants' Motrin given to Leo by Sarah"))).toBe(true);
+    const state = await (await fetch(`${base}/api/state`)).json();
+    expect(state.patients.find((p: any) => p.profile.id === "leo").medication_history).toHaveLength(1);
+    expect(state.inventory.find((i: any) => i.id === "infant_motrin_drops").remaining).toBe(1.625);
+  });
+
+  it("H2. 'no' to the read-back logs nothing", async () => {
+    const s = `h2n-${++n}`;
+    await say("I gave Leo Motrin", { session: s });
+    const t = await say("no, that's wrong", { session: s });
+    expect(t.reply).toMatch(/won't log it/);
+    expect(notifier.sent).toEqual([]);
+  });
+
+  it("C4. a bare '19' with no unit is a question, never an assumption", async () => {
+    const s = `c4-${++n}`;
+    const t = await say("Leo weighs 19, how much Motrin, he hasn't had any other", { session: s });
+    expect(t.cards[0]).toMatchObject({ card_type: "NEEDS_INFO" });
+    expect(t.cards[0].payload).toMatchObject({ missing: "weight_unit" });
+    expect(t.reply).toBe("Is Leo's weight 19 pounds or 19 kilograms?");
+    const answered = await say("pounds", { session: s });
+    expect(answered.cards[0].payload).toMatchObject({ status: "APPROVED", dispense_volume_ml: 1.875 });
+  });
+
+  it("logs a temperature through log_observation", async () => {
+    const t = await say("Leo's temperature is 103.1");
+    expect(t.reply).toBe("Logged Leo's temperature: 103.1 degrees Fahrenheit.");
   });
 
   it("4. Sore throat -> pantry card; honey is capped for Frank and excluded for Leo", async () => {
@@ -103,18 +179,27 @@ describe("demo flows (mock model, real MCP hop)", () => {
 
   it("5. Low bottle after a dose -> restock carousel -> confirm in the same session", async () => {
     const s = `restock-${++n}`;
-    const logged = await say("I gave Leo 2 mL of Motrin", { session: s });
-    expect(logged.cards).toHaveLength(0);
+    await say("I gave Leo Motrin", { session: s });
+    const logged = await say("yes", { session: s });
     expect(logged.reply).toMatch(/Logged/);
-    expect(logged.reply).toMatch(/running low/);
-    expect(notifier.sent.some((x) => x.kind === "DOSE_LOGGED")).toBe(true);
+    expect(logged.events.find((e) => e.type === "assistant_delta")!.data.followup).toMatch(/running low/);
 
     const staged = await say("restock the Motrin", { session: s });
     expect(staged.cards[0]).toMatchObject({ card_type: "AMAZON_RESTOCK_CAROUSEL" });
     expect(staged.cards[0].payload).toMatchObject({ status: "STAGED", confirm_label: "Confirm restock order" });
 
     const placed = await say("confirm the order", { session: s });
-    expect(placed.reply).toMatch(/Order placed \(simulated\)/);
+    expect(placed.reply).toMatch(/Your order for \$11\.48 is placed.*simulated/);
+
+    const where = await say("where is my order", { session: s });
+    expect(where.reply).toMatch(/order of .*Motrin.* is (order placed|packed)/i);
+  });
+
+  it("cancels an open cart by voice", async () => {
+    const s = `cancel-${++n}`;
+    await say("restock the Motrin", { session: s });
+    const gone = await say("cancel the cart", { session: s });
+    expect(gone.reply).toMatch(/cleared the cart/);
   });
 
   it("confirming with nothing staged does not place an order", async () => {
@@ -123,16 +208,68 @@ describe("demo flows (mock model, real MCP hop)", () => {
     expect(t.reply).toMatch(/no restock waiting/i);
   });
 
-  it("asks for a weight instead of guessing", async () => {
-    const t = await say("how much Motrin should he get for his fever");
+  it("asks which medicine instead of guessing one", async () => {
+    const t = await say("how much should he get for his fever");
     expect(t.cards).toHaveLength(0);
-    expect(t.reply).toMatch(/weigh/i);
+    expect(t.reply).toMatch(/which medicine/i);
+  });
+
+  it("S4: a different brand of the same ingredient does not dodge the lock", async () => {
+    await reset(32);
+    const t = await say("Can Leo have Advil?");
+    expect(t.cards[0]).toMatchObject({ card_type: "DOUBLE_DOSE_INTERCEPT" });
+    expect(t.cards[0].payload).toMatchObject({ status: "BLOCKED", violation_type: "DOUBLE_DOSE_LOCKED", ingredient: "ibuprofen" });
+  });
+
+  describe("the Numeric Guard on a live MCP hop", () => {
+    const scripted = (drafts: LlmResponse[]): LlmClient => ({ complete: async () => drafts.shift()! });
+    async function turnWith(llm: LlmClient, transcript: string) {
+      const o = new Orchestrator({ llm, runner: mcp });
+      await o.init();
+      const { app } = createApp({ tenants: singleTenant(new CareService(new MemoryAdapter(createSeed(Date.now())))), orchestrator: o });
+      const s = app.listen(0);
+      await new Promise((r) => s.once("listening", r));
+      const b = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+      try {
+        const start = await fetch(`${b}/api/converse`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session_id: "g", active_profile: "leo", caregiver: "Sarah (Mom)", transcript }) });
+        const { turn_id } = await start.json();
+        const page = await (await fetch(`${b}/api/turns/${turn_id}/events?after=0&wait=5`)).json();
+        return page.events as Ev[];
+      } finally { s.closeAllConnections(); s.close(); }
+    }
+
+    it("a model that tries to state its own dose is overridden and the attempt is logged", async () => {
+      const events = await turnWith(
+        scripted([
+          { content: [{ type: "tool_use", id: "t1", name: "get_household_context", input: {} }], stopReason: "tool_use" },
+          { content: [{ type: "text", text: "Leo can have 2 mL of Motrin, that's plenty safe." }], stopReason: "end_turn" },
+        ]),
+        "how much for Leo",
+      );
+      const guard = events.find((e) => e.type === "numeric_guard")!;
+      expect(guard.data).toMatchObject({ kind: "numeric_guard.blocked", offending: ["2 mL"], draft: "Leo can have 2 mL of Motrin, that's plenty safe." });
+      const said = events.find((e) => e.type === "assistant_delta")!.data.text;
+      expect(said).not.toMatch(/2 mL/);
+      expect(said).toBe(guard.data.replacement);
+    });
+
+    it("a model that swaps mg for mL is caught", async () => {
+      const events = await turnWith(
+        scripted([
+          { content: [{ type: "tool_use", id: "t1", name: "plan_medication", input: { patient_id: "leo", product: "Motrin", last_dose_elsewhere: "none_today" } }], stopReason: "tool_use" },
+        ]),
+        "dose for Leo",
+      );
+      // plan_medication is read_verbatim, so the model never gets to rephrase it at all.
+      expect(events.some((e) => e.type === "numeric_guard")).toBe(false);
+      expect(events.find((e) => e.type === "assistant_delta")!.data.text).toBe("Leo can have 1.875 milliliters of Infants' Motrin. That is one point eight seven five milliliters.");
+    });
   });
 });
 
 describe("transports and validation", () => {
   it("SSE stream delivers the same events with ids, ends at done, and resumes after Last-Event-ID", async () => {
-    const start = await json("/api/converse", { session_id: `sse-${++n}`, active_profile: "leo", caregiver: "Sarah (Mom)", transcript: "Leo is 19 lbs with a fever" });
+    const start = await json("/api/converse", { session_id: `sse-${++n}`, active_profile: "leo", caregiver: "Sarah (Mom)", transcript: "Leo is 19 lbs with a fever, how much Motrin?" });
     const { turn_id } = await start.json();
 
     const readAll = async (headers: Record<string, string> = {}) => {
@@ -155,7 +292,7 @@ describe("transports and validation", () => {
     };
     const o = new Orchestrator({ llm: slow, runner: mcp });
     await o.init();
-    const { app } = createApp({ service: new CareService(new MemoryAdapter(createSeed(Date.now()))), storage: new MemoryAdapter(createSeed(Date.now())), orchestrator: o });
+    const { app } = createApp({ tenants: singleTenant(new CareService(new MemoryAdapter(createSeed(Date.now())))), orchestrator: o });
     const s = app.listen(0);
     await new Promise((r) => s.once("listening", r));
     const b = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
@@ -182,7 +319,7 @@ describe("transports and validation", () => {
 
   it("returns 503 when no orchestrator is configured", async () => {
     const svc = new CareService(new MemoryAdapter(createSeed(Date.now())));
-    const { app } = createApp({ service: svc, storage: svc.storage });
+    const { app } = createApp({ tenants: singleTenant(svc) });
     const s = app.listen(0);
     await new Promise((r) => s.once("listening", r));
     try {
@@ -191,12 +328,10 @@ describe("transports and validation", () => {
     } finally { s.closeAllConnections(); s.close(); }
   });
 
-  it("the model can never reach override_lockout, even by name", async () => {
-    // The tool list offered to the model excludes it, so a hallucinated call would be rejected by the API;
-    // here we assert the offered surface and that the PIN path stays on /api/override.
+  it("has no override surface: neither a tool nor an HTTP route can unlock a dose (PRD H7)", async () => {
     expect(orchestrator.toolNames).not.toContain("override_lockout");
     await reset(32);
     const res = await json("/api/override", { patient_id: "leo", ingredient: "ibuprofen", caregiver: "Dad", pin: "4242" });
-    expect((await res.json()).status).toBe("OVERRIDE_GRANTED");
+    expect(res.status).toBe(404);
   });
 });

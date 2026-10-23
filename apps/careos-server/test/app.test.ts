@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CareService, MemoryAdapter, MemoryNotifier, createSeed } from "open-caregiver-mcp";
 import { createApp } from "../src/app.js";
+import { singleTenant } from "../src/tenants.js";
 
 let server: Server;
 let base: string;
@@ -16,8 +17,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 beforeAll(async () => {
   storage = new MemoryAdapter(createSeed(Date.now()));
   notifier = new MemoryNotifier();
-  const service = new CareService(storage, { notifier, overridePin: "4242" });
-  const { app } = createApp({ service, storage, sseHeartbeatMs: 60 });
+  const service = new CareService(storage, { notifier });
+  const { app } = createApp({ tenants: singleTenant(service), sseHeartbeatMs: 60 });
   server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -72,21 +73,22 @@ const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: 
 describe("REST", () => {
   it("healthz; no CORS headers by default (same-origin web app)", async () => {
     const res = await fetch(`${base}/healthz`);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toMatchObject({ ok: true, mcp: { transport: "streamable-http", stateless: true }, auth: "open-loopback" });
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("CORS preflight only when an origin is explicitly allowed", async () => {
     const service = new CareService(new MemoryAdapter(createSeed(Date.now())));
-    const { app } = createApp({ service, storage: service.storage, allowedOrigin: "http://localhost:6274" });
+    const { app } = createApp({ tenants: singleTenant(service), allowedOrigin: "http://localhost:6274" });
     const s = app.listen(0);
     await new Promise((r) => s.once("listening", r));
     try {
-      const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/override`;
+      const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/state`;
       const pre = await fetch(url, { method: "OPTIONS" });
       expect(pre.status).toBe(204);
       expect(pre.headers.get("access-control-allow-origin")).toBe("http://localhost:6274");
-      expect(pre.headers.get("access-control-allow-headers")).toContain("mcp-session-id");
+      expect(pre.headers.get("access-control-allow-headers")).toContain("authorization");
+      expect(pre.headers.get("access-control-allow-headers")).not.toContain("mcp-session-id");
     } finally { s.closeAllConnections(); s.close(); }
   });
 
@@ -104,39 +106,49 @@ describe("REST", () => {
     const leo = s.patients.find((p: any) => p.profile.id === "leo");
     expect(leo.active_locks[0]).toMatchObject({ ingredient: "ibuprofen", status: "DOUBLE_DOSE_LOCKED" });
     const c = await mcpClient();
-    const r = await c.callTool({ name: "log_administration_event", arguments: { patient_id: "infant_leo", caregiver_name: "Dad", medication: "Infant Motrin Drops", volume_ml: 2, idempotency_key: "dad-1" } });
-    expect(r.structuredContent).toMatchObject({ status: "REJECTED_LOCKED", card_type: "DOUBLE_DOSE_INTERCEPT" });
+    const r = await c.callTool({ name: "confirm_dose_given", arguments: { patient_id: "infant_leo", product: "Motrin", caregiver_id: "Dad" } });
+    expect(r.structuredContent).toMatchObject({ status: "REJECTED_LOCKED", card_type: "DOUBLE_DOSE_INTERCEPT", violation_type: "DOUBLE_DOSE_LOCKED" });
     await c.close();
+  });
+
+  it("/api/inspect exposes the stored ledger, audit trail, observations and remembered advice (read-only)", async () => {
+    await post("/api/demo/reset", { sarah_dosed_minutes_ago: 20 });
+    const c = await mcpClient();
+    await c.callTool({ name: "plan_medication", arguments: { patient_id: "frank", product: "Advil" } });
+    await c.close();
+    const r = await (await fetch(`${base}/api/inspect`)).json();
+    expect(r.backend).toBe("memory");
+    expect(r.ledger[0]).toMatchObject({ patientId: "leo", caregiver: "Sarah (Mom)", volumeMl: 1.875, amountMg: 75 });
+    expect(r.audit[0]).toMatchObject({ tool: "plan_medication", verdict: "ALTERNATE_SUGGESTED", reasonCodes: expect.arrayContaining(["SR-NSAID-ANTICOAGULANT"]) });
+    expect(r.observations.some((o: any) => o.type === "weight" && o.patientId === "leo")).toBe(true);
+    expect(r.advice[0]).toMatchObject({ drug: "naproxen", givenBy: "Dr. Rao" });
+    expect((await fetch(`${base}/api/inspect`, { method: "POST" })).status).toBe(404); // read-only
   });
 
   it("rejects bad demo-reset input with 400", async () => {
     expect((await post("/api/demo/reset", { sarah_dosed_minutes_ago: -5 })).status).toBe(400);
   });
 
-  it("/api/override validates, denies wrong PINs and grants the right one", async () => {
-    const ok = { patient_id: "leo", ingredient: "ibuprofen", caregiver: "Dad" };
-    expect((await post("/api/override", { ...ok, pin: "12" })).status).toBe(400);
-    expect((await post("/api/override", { ...ok, patient_id: "nobody", pin: "4242" })).status).toBe(404);
-    expect(await (await post("/api/override", { ...ok, pin: "0000" })).json()).toMatchObject({ status: "OVERRIDE_DENIED" });
-    expect(await (await post("/api/override", { ...ok, pin: "4242" })).json()).toMatchObject({ status: "OVERRIDE_GRANTED" });
+  it("exposes no override route: a lock cannot be bypassed over HTTP (PRD H7)", async () => {
+    expect((await post("/api/override", { patient_id: "leo", ingredient: "ibuprofen", caregiver: "Dad", pin: "4242" })).status).toBe(404);
   });
 });
 
 describe("Trace stream", () => {
   it("replays classified frames for tool calls, including blocked ones", async () => {
     const c = await mcpClient();
-    await c.callTool({ name: "calculate_pediatric_dose", arguments: { patient_id: "infant_leo", weight_value: 19, weight_unit: "lbs", medication: "ibuprofen", formulation: "infant_drops" } });
-    await c.callTool({ name: "verify_medication_safety", arguments: { patient_id: "elder_frank", proposed_medication: "advil", administration_intent: false } });
+    await c.callTool({ name: "plan_medication", arguments: { patient_id: "infant_leo", product: "Motrin", weight_value: 19, weight_unit: "lb", last_dose_elsewhere: "none_today" } });
+    await c.callTool({ name: "plan_medication", arguments: { patient_id: "elder_frank", product: "advil" } });
     await c.close();
 
     const { events } = await readSse("/api/trace", (e) => e.filter((x) => x.data?.kind === "blocked").length >= 1);
     const frames = events.map((e) => e.data);
-    const call = frames.find((f) => f.kind === "call" && f.tool === "calculate_pediatric_dose");
+    const call = frames.find((f) => f.kind === "call" && f.tool === "plan_medication");
     expect(call.summary).toContain('"weight_value":19');
-    const ok = frames.find((f) => f.kind === "result" && f.tool === "calculate_pediatric_dose");
-    expect(ok.summary).toContain('"dispense_volume_ml":2');
+    const ok = frames.find((f) => f.kind === "result" && f.tool === "plan_medication");
+    expect(ok.summary).toContain('"dispense_volume_ml":1.875');
     const blocked = frames.find((f) => f.kind === "blocked");
-    expect(blocked).toMatchObject({ tool: "verify_medication_safety", dir: "out" });
+    expect(blocked).toMatchObject({ tool: "plan_medication", dir: "out" });
     expect(blocked.summary).toContain("DRUG_CONTRAINDICATION");
     expect(events.every((e) => e.id === String(e.data.id))).toBe(true);
   });

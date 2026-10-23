@@ -31,6 +31,11 @@
       "source": "./src/http.ts",
       "types": "./dist/http.d.ts",
       "default": "./dist/http.js"
+    },
+    "./testing": {
+      "source": "./src/testing/storageContract.ts",
+      "types": "./dist/testing/storageContract.d.ts",
+      "default": "./dist/testing/storageContract.js"
     }
   },
   "bin": {

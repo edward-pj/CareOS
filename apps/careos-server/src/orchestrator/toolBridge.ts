@@ -43,18 +43,10 @@ export function sanitizeSchema(schema: Json, where = "schema"): Json {
   return walk(schema, []);
 }
 
-/**
- * Tools the model must never see. override_lockout takes a caregiver PIN; PINs are entered on the
- * device keypad and sent to /api/override, so they can never pass through a transcript or the model.
- */
-export const MODEL_HIDDEN_TOOLS = new Set(["override_lockout"]);
-
 export function toLlmTools(tools: McpToolDef[]): LlmTool[] {
-  return tools
-    .filter((t) => !MODEL_HIDDEN_TOOLS.has(t.name))
-    .map((t) => ({
-      name: t.name,
-      description: t.description ?? t.name,
-      input_schema: sanitizeSchema(t.inputSchema, `tool ${t.name}`),
-    }));
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description ?? t.name,
+    input_schema: sanitizeSchema(t.inputSchema, `tool ${t.name}`),
+  }));
 }

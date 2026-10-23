@@ -60,6 +60,8 @@ describe("parseShiftSwitch", () => {
 describe("buildHandoff", () => {
   const snap: PatientSnapshot = {
     profile: { id: "leo", name: "Leo", kind: "infant", dobMs: 0, activeRx: [], conditions: [], allergies: [], age_days: 200, weight_kg: 10 },
+    observations: [],
+    weight_days_ago: null,
     medication_history: [
       { eventId: "1", patientId: "leo", medication: "Motrin", ingredient: "ibuprofen", caregiver: "Sarah", at: Date.UTC(2026, 0, 1, 12), volumeMl: 2 },
       { eventId: "2", patientId: "leo", medication: "Tylenol", ingredient: "acetaminophen", caregiver: "Mike", at: Date.UTC(2026, 0, 1, 9), volumeMl: 3 },

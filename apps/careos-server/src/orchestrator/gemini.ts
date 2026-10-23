@@ -119,7 +119,7 @@ export class GeminiLlm implements LlmClient {
         generateContent: (params) => ai.models.generateContent(params),
       };
     }
-    this.modelId = opts.modelId ?? "gemini-3.8-flash";
+    this.modelId = opts.modelId ?? "gemini-2.5-flash";
     this.maxTokens = opts.maxTokens ?? 1024;
   }
 

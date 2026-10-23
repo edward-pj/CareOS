@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpToolDef } from "./toolBridge.js";
@@ -17,8 +18,10 @@ export interface ToolRunner {
 export class McpToolClient implements ToolRunner {
   private client = new Client({ name: "careos-orchestrator", version: "0.1.0" });
 
-  async connect(url: URL): Promise<void> {
-    await this.client.connect(new StreamableHTTPClientTransport(url));
+  /** `token` is sent as a Bearer credential on every request, so tool calls run as that caller's household. */
+  async connect(url: URL, token?: string): Promise<void> {
+    const requestInit = token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
+    await this.client.connect(new StreamableHTTPClientTransport(url, { requestInit }));
   }
 
   async listTools(): Promise<McpToolDef[]> {
@@ -35,5 +38,33 @@ export class McpToolClient implements ToolRunner {
 
   async close(): Promise<void> {
     await this.client.close();
+  }
+}
+
+/**
+ * One connected client per distinct bearer token (i.e. per caller), created on first use. The server is
+ * stateless, so a cached client keeps working across server restarts and needs no keep-alive.
+ */
+export class McpRunnerPool {
+  private clients = new Map<string, Promise<McpToolClient>>();
+
+  constructor(private url: URL, private maxClients = 100) {}
+
+  forToken(token: string | undefined): Promise<ToolRunner> {
+    const key = token ? createHash("sha256").update(token).digest("hex") : "open";
+    let c = this.clients.get(key);
+    if (!c) {
+      const client = new McpToolClient();
+      c = client.connect(this.url, token).then(() => client);
+      c.catch(() => this.clients.delete(key)); // do not cache a failed connection
+      this.clients.set(key, c);
+      if (this.clients.size > this.maxClients) {
+        const oldest = this.clients.keys().next().value!;
+        const evicted = this.clients.get(oldest);
+        this.clients.delete(oldest);
+        void evicted?.then((x) => x.close()).catch(() => {});
+      }
+    }
+    return c;
   }
 }

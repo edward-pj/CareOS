@@ -232,7 +232,7 @@ describe("thoughtSignature round-trip", () => {
     expect(res.content[0]).toMatchObject({ type: "tool_use", thoughtSignature: "sig-abc" });
 
     const contents = toGeminiContents([{ role: "assistant", content: res.content }]);
-    expect(contents[0].parts![0].thoughtSignature).toBe("sig-abc");
+    expect(contents[0]!.parts![0]!.thoughtSignature).toBe("sig-abc");
     expect(sent.model).toBeTruthy();
   });
 });

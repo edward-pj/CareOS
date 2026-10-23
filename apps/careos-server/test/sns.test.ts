@@ -23,7 +23,7 @@ describe("SnsNotifier", () => {
     const log = vi.fn();
     const send = vi.fn().mockReturnValue(new Promise(() => {}));
     const t0 = Date.now();
-    await expect(new SnsNotifier({ send } as never, arn, 80, log).send("OVERRIDE_USED", "x")).resolves.toBeUndefined();
+    await expect(new SnsNotifier({ send } as never, arn, 80, log).send("DOSE_LOGGED", "x")).resolves.toBeUndefined();
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("timed out"));
   });

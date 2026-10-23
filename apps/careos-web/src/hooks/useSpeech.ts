@@ -31,10 +31,11 @@ export interface Speech {
 }
 
 /** Browser voice for the simulator: mic -> transcript via Web Speech, replies via speechSynthesis. */
-export function useSpeech(onFinalTranscript: (text: string) => void): Speech {
+export function useSpeech(onFinalTranscript: (text: string) => void, speakReplies = true): Speech {
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
-  const [voiceReplies, setVoiceReplies] = useState(true);
+  const [voiceReplies, setVoiceReplies] = useState(speakReplies);
+  useEffect(() => setVoiceReplies(speakReplies), [speakReplies]);
   const rec = useRef<Recognition | undefined>(undefined);
   const micSupported = typeof window !== "undefined" && !!Ctor();
   const onFinal = useRef(onFinalTranscript);

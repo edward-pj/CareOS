@@ -13,11 +13,24 @@ export interface Config {
   /** Browser origin to allow via CORS. Unset when the web app reaches the server through the Vite proxy (same origin). */
   allowedOrigin?: string;
   host: string;
+  /** CAREOS_TOKENS: "token=household:caregiver,..." bearer credentials. Unset means open mode (loopback only). */
+  tokens?: string;
   llmMode: "mock" | "bedrock" | "gemini";
   bedrockModelId: string;
   geminiApiKey?: string;
   geminiModelId: string;
   sseHeartbeatMs: number;
+  /** How long a simulated Amazon order takes to arrive, in seconds (SHOP_DEMO_SECONDS). The real promise is shown as the ETA. */
+  shopDemoSeconds: number;
+  /** QUIET_HOURS="22:00-07:00": non-safety alerts to other caregivers wait until the window ends. */
+  quietHours?: string;
+  /** IANA zone the quiet hours are read in (CAREOS_TIMEZONE). */
+  timeZone?: string;
+  locale: "US" | "IN";
+  /** Where the household is, for the nearby-hospitals search (HOUSEHOLD_LAT / HOUSEHOLD_LNG). */
+  origin?: { lat: number; lng: number };
+  /** Read prescription and bottle photos with Gemini (needs GEMINI_API_KEY). Off with VISION=off. */
+  vision: boolean;
 }
 
 function tryLoadEnv(): void {
@@ -62,7 +75,7 @@ export function loadConfig(env?: NodeJS.ProcessEnv): Config {
     llmMode,
     bedrockModelId: activeEnv.BEDROCK_MODEL_ID ?? "us.amazon.nova-pro-v1:0",
     geminiApiKey: activeEnv.GEMINI_API_KEY || undefined,
-    geminiModelId: activeEnv.GEMINI_MODEL_ID ?? "gemini-3.8-flash",
+    geminiModelId: activeEnv.GEMINI_MODEL_ID ?? "gemini-2.5-flash",
     port: Number(activeEnv.PORT ?? 8787),
     storage,
     table: activeEnv.DDB_TABLE ?? "careos",
@@ -74,6 +87,13 @@ export function loadConfig(env?: NodeJS.ProcessEnv): Config {
     allowedOrigin: activeEnv.ALLOWED_ORIGIN || undefined,
     // Loopback by default: the demo server is unauthenticated, so it should not listen on the LAN unless asked.
     host: activeEnv.HOST ?? "127.0.0.1",
+    tokens: activeEnv.CAREOS_TOKENS || undefined,
     sseHeartbeatMs: Number(activeEnv.SSE_HEARTBEAT_MS ?? 25_000),
+    quietHours: activeEnv.QUIET_HOURS || undefined,
+    timeZone: activeEnv.CAREOS_TIMEZONE || undefined,
+    locale: (activeEnv.CAREOS_LOCALE ?? "US").toUpperCase() === "IN" ? "IN" : "US",
+    origin: Number.isFinite(Number(activeEnv.HOUSEHOLD_LAT)) && Number.isFinite(Number(activeEnv.HOUSEHOLD_LNG)) && activeEnv.HOUSEHOLD_LAT && activeEnv.HOUSEHOLD_LNG ? { lat: Number(activeEnv.HOUSEHOLD_LAT), lng: Number(activeEnv.HOUSEHOLD_LNG) } : undefined,
+    vision: activeEnv.VISION !== "off" && Boolean(activeEnv.GEMINI_API_KEY),
+    shopDemoSeconds: Math.min(3600, Math.max(5, Number(activeEnv.SHOP_DEMO_SECONDS ?? 60) || 60)),
   };
 }

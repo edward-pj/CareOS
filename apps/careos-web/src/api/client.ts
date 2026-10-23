@@ -1,4 +1,4 @@
-import { TURN_EVENT_TYPES, type ConverseRequest, type OverrideRequest, type StateResponse, type TraceFrame, type TurnEvent } from "./types";
+import { TURN_EVENT_TYPES, type ConverseRequest, type Health, type InspectResponse, type ShopEvent, type ShopScenario, type ShopView, type StateResponse, type TraceFrame, type TurnEvent } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -38,10 +38,30 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
 
 export const api = {
   getState: () => request<StateResponse>("GET", "/api/state"),
+  getInspect: () => request<InspectResponse>("GET", "/api/inspect"),
+  getHealth: () => request<Health>("GET", "/healthz"),
   resetDemo: (sarahDosedMinutesAgo?: number) =>
     request<{ ok: true }>("POST", "/api/demo/reset", sarahDosedMinutesAgo === undefined ? {} : { sarah_dosed_minutes_ago: sarahDosedMinutesAgo }),
+  getShop: () => request<ShopView>("GET", "/api/shop"),
+  shopAdd: (itemName: string) => request<{ status: string }>("POST", "/api/shop/cart", { items: [{ item_name: itemName }] }),
+  shopOrder: (cartId: string) => request<{ status: string }>("POST", `/api/shop/carts/${encodeURIComponent(cartId)}/order`),
+  shopCancel: (cartId: string) => request<{ status: string; speech?: string }>("POST", `/api/shop/carts/${encodeURIComponent(cartId)}/cancel`),
+  shopScenario: (scenario: ShopScenario) => request<unknown>("POST", `/api/demo/shop/${scenario}`),
+  /** Sends raw image bytes. The server checks the bytes, not the type we claim. */
+  uploadPhoto: async (file: Blob): Promise<{ upload_id: string; mime: string }> => {
+    let res: Response;
+    try { res = await fetch("/api/uploads", { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file }); } catch { throw new ApiError(UNREACHABLE); }
+    if (!res.ok) {
+      const e = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(e.error === "not_an_image" ? "That file isn't a photo I can read." : e.error === "too_large" ? "That photo is too large. Try a smaller one." : `Upload failed (${res.status})`, res.status);
+    }
+    return (await res.json()) as { upload_id: string; mime: string };
+  },
+  readPrescriptionPhoto: (uploadId: string, patientId: string) => request<Record<string, unknown>>("POST", "/api/photos/prescription", { upload_id: uploadId, patient_id: patientId }),
+  readLabelPhoto: (uploadId: string, patientId: string) => request<Record<string, unknown>>("POST", "/api/photos/label", { upload_id: uploadId, patient_id: patientId }),
+  confirmRx: (id: string, fields: { drug?: string; strength?: string; frequency?: string; prescriber?: string }) => request<Record<string, unknown>>("POST", `/api/prescriptions/${encodeURIComponent(id)}/confirm`, fields),
+  rejectRx: (id: string) => request<Record<string, unknown>>("POST", `/api/prescriptions/${encodeURIComponent(id)}/reject`),
   converse: (body: ConverseRequest) => request<{ turn_id: string }>("POST", "/api/converse", body),
-  override: (body: OverrideRequest) => request<{ status: string; reason?: string }>("POST", "/api/override", body),
 };
 
 /**
@@ -62,10 +82,17 @@ export function followTurn(turnId: string, onEvent: (e: TurnEvent) => void, onFa
       if (type === "done") finish();
     });
   }
+  // EventSource reconnects by itself and resumes from Last-Event-ID, so a proxy idle-timeout or a server restart is not
+  // fatal. Give up only when the browser has stopped retrying, or after several failed attempts in a row.
+  let failures = 0;
+  es.onopen = () => { failures = 0; };
   es.onerror = () => {
     if (finished) return;
-    finish();
-    onFail(new Error("Lost connection to the CareOS server."));
+    failures += 1;
+    if (es.readyState === EventSource.CLOSED || failures >= 5) {
+      finish();
+      onFail(new Error("Lost connection to the CareOS server."));
+    }
   };
   return finish;
 }
@@ -76,5 +103,14 @@ export function subscribeTrace(onFrame: (f: TraceFrame) => void, onStatus: (conn
   es.onopen = () => onStatus(true);
   es.onerror = () => onStatus(false);
   es.addEventListener("frame", (m) => onFrame(JSON.parse((m as MessageEvent<string>).data) as TraceFrame));
+  return () => es.close();
+}
+
+/** Live shopping changes (GET /api/shop/stream). EventSource reconnects by itself; `onStatus` drives the LIVE indicator. */
+export function subscribeShop(onEvent: (e: ShopEvent) => void, onStatus: (connected: boolean) => void): () => void {
+  const es = new EventSource("/api/shop/stream");
+  es.onopen = () => onStatus(true);
+  es.onerror = () => onStatus(false);
+  es.addEventListener("shop", (m) => onEvent(JSON.parse((m as MessageEvent<string>).data) as ShopEvent));
   return () => es.close();
 }

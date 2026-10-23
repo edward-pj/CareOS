@@ -1,105 +1,63 @@
-# CareOS — Plan (Web simulator edition)
+# CareOS: architecture and status (PRD v2)
 
-Supersedes the Vega edition. The deterministic engines, MCP surface, DynamoDB/SNS design, safety rules and the
-Phase 4 Bedrock orchestrator are **unchanged**. Only the **client** changed: the React Native for Vega app was dropped
-(Vega has no app-level STT/TTS/SSE and the SDK could not be installed here), and replaced by a browser simulator.
+> Demo only. Not a medical device.
 
-> Demo only — not a medical device.
+Authoritative product spec: the PRD v2 (tiers P0/P1/P2). This file records what is built, how it fits together and what is next.
 
-## Why a simulator
+## Architecture
 
-The hackathon asks for a simulated Alexa+ surface that shows the assistant listening and answering. A browser app
-demonstrates that without device hardware, and in a browser we get the things Vega lacked: Web Speech (mic), 
-`speechSynthesis` (spoken replies) and `EventSource` (SSE).
+```
+Echo Show 15 simulator (React, 1920x1080)      "Alexa+ stand-in" orchestrator            CareOS MCP server (stateless)
+ cards · voice orb · MCP/Data/Guard drawers ──▶ Gemini (or Bedrock / mock) tool loop ──▶ POST /mcp  (Streamable HTTP, bearer auth)
+        ▲  SSE: turn events + wire trace             │ Numeric Guard on every free-text reply         │
+        │                                            └── real MCP client, one per caller token         ▼
+        └──────────────── /api/* (same bearer auth) ◀──────────────────────────────  open-caregiver-mcp
+                                                                                       label registry · dose engine · safety rules
+                                                                                       plan_medication · confirm_dose_given · ...
+                                                                                              │
+                                                                       StorageRoot.forHousehold(id)  (isolation by construction)
+                                                                       memory │ Supabase (Postgres RPC) │ DynamoDB
+```
+
+Principles (each has tests): **S1** tools own the numbers; **S2** fail closed; **S3** no record is not no dose; **S4** ingredients, not brands; **S5** label dose and mg/kg must agree; **S6** untrusted input needs a human confirm; **S7** never default to a person; **S9** every verdict cites a source; **H7** nothing can bypass a check.
 
 ## Status
 
-| Phase | Scope | State |
-|---|---|---|
-| 0 | Scaffold | done |
-| 1 | Deterministic engines (`open-caregiver-mcp`) | done |
-| 2 | MCP server + Streamable HTTP mount | done |
-| 3 | `careos-server`, DynamoDB transact writes, SNS, trace tap | done |
-| 4 | Bedrock orchestrator | done: tested offline (mock model); live Bedrock smoke script written but **not run** |
-| 5 | **Web simulator** (`apps/careos-web`): dual pane, conversation, live dashboard, 5 cards | done: typechecks, 19 unit tests, builds, and every flow was driven in headless Chrome against the mock model |
-| 6 | Polish + demo script: five scripted flows, error states, visual QA | mostly done: flows, error states and screenshots verified, `docs/DEMO.md` written; open items in "Next steps" |
-| 7 | Hardening + deploy (server on App Runner, web as static build) | after 6 |
-| 8 | Open-source release + submission | after 7 |
-
-## Target
-
-A single **Vite + React + Tailwind** web app, dual pane, running in the browser against the unchanged `careos-server`.
-
-```
-┌──────────────────────── LEFT: Alexa+ surface ───────────┬──────────────── RIGHT: CareOS live monitor ─────────────┐
-│ chat bubbles ("Alexa, …"), mic toggle, preset chips      │ profile + caregiver pickers, LIVE badge, Reset demo       │
-│ Agent reasoning (Bedrock): ⚡ tool, args, MCP payload     │ Next dose due (lockout countdown)                         │
-│ Alexa reply (also spoken) + rich card                    │ Caregiver activity timeline (from the dose ledger)        │
-│ (syringe / lock / shield / pantry / restock carousel)    │ Caregiver handoff summary, supplies, MCP wire log         │
-└──────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────┘
-```
-
-### How it talks to the server (no server changes)
-
-| Need | Mechanism |
+| PRD phase | State |
 |---|---|
-| Send an utterance | `POST /api/converse` → `{turn_id}` |
-| Reply, tool trace, card | SSE `GET /api/turns/:id/stream` via `EventSource` (events: `assistant_delta`, `tool_call`, `tool_result`, `card`, `alert`, `error`, `done`) |
-| Dashboard state | `GET /api/state` |
-| **Right pane updates live** | The server pushes no state events. Every MCP call crosses `/mcp` and is streamed on `GET /api/trace` (SSE); a finished tool-call frame triggers a debounced refetch of `/api/state`. A 10 s poll is the fallback. |
-| Reset demo | `POST /api/demo/reset` |
-| Lockout override (PIN) | `POST /api/override` from the lock card; the PIN never reaches the model |
-| CORS | Off on the server. Vite dev proxy forwards `/api`, `/mcp`, `/healthz` to `localhost:8787` (`CAREOS_SERVER` overrides). |
+| 0 Foundation: household-scoped storage, atomic `commit_dose` (Supabase SQL, DynamoDB transaction), shared storage contract tests, PIN override removed | done |
+| 1 Stateless, bearer-authenticated `/mcp`; per-household tenants, turns and traces | done |
+| 2 Safety engine v2: FDA-sourced label registry, label-first dosing with mg/kg cross-check, 17 cited rules, layered `plan_medication`, verdicts with reason codes and sources | done |
+| 3 `confirm_dose_given` (signed read-back, idempotent, backdating), double-dose intercept, Memory Conflict Guard, audit trail | done |
+| 4 Orchestrator: verbatim speech, unit-aware Numeric Guard (`numeric_guard.blocked`), fail-closed errors | done |
+| 5 Echo Show simulator: new cards, MCP / Data / Numeric Guard inspectors, emergency card, accessibility toggles | done, verified in headless Chrome |
+| 6 P0 test suite (golden scenarios keyed to PRD ids, 50-way race, isolation, guard) | done |
+| 7 P1: triage + emergency flows (cited red-flag rules as data, locale, fixture hospitals), prescription photos (Gemini vision, PENDING until confirmed), Label Lens, SBAR + PDF export, quiet hours, privacy delete, bottle expiry, alternating-medicine note, illness episodes; plus the simulated Amazon storefront (cart, orders, live Orders screen) | done, verified in headless Chrome incl. live Gemini vision on synthetic images |
+| 8 Deploy, open-source release (README, CI), submission | **not started** |
 
-`/api/turns/:id/events?after=&wait=` (long-poll) stays on the server; the web app does not use it.
+## Not built or not verified
 
-### Layout of `apps/careos-web`
+- P2 features (see the PRD). Hospitals (Amazon Location), SNS delivery and Bedrock are behind interfaces and not live: nearby hospitals are labelled sample data.
+- Red-flag rules are a small set of 20 cited starter rules, not a clinical triage tool. One threshold (no wet diaper for 8 hours) is the PRD's and is not stated by the AAP page it cites; a clinician should confirm it. Locale `IN` is configured but not exercised beyond tests.
+- "Send directions to phone" is a disabled button: it needs a live place-search service and a way to text the user.
+- Prescription and label reading was run live on synthetic documents only. Real photos (glare, angles, handwriting) are untested.
+- Supabase: the SQL is executed in tests (PGlite) and the contract test exists, but the 50-way race against a real Supabase project (`SUPABASE_CONTRACT=1`) has not been run, because the project in `.env` did not have the new schema applied when checked.
+- Web Speech (mic) and `speechSynthesis` are not exercised by automated tests.
+- Dose tables are transcribed from openFDA label data. A human should re-check each row on DailyMed.
+- Syringe tick marks are not modelled: labels do not state them.
 
-- `src/api/` — hand-written contract types, `fetch` client, `followTurn` (turn SSE), `subscribeTrace` (wire SSE).
-- `src/lib/` — pure, unit-tested logic: `conversation.ts` (reducer, alert copy, client-side "switch caregiver" intent), `handoff.ts`, `time.ts`; tests in `lib.test.ts`.
-- `src/hooks/` — `useHousehold` (state + live refresh + wire frames), `useConversation`, `useSpeech` (Web Speech + `speechSynthesis`), `useNow`.
-- `src/components/` — `AlexaPane`, `AgentTrace`, `Cards` (card router keyed by `card_type`), `DashboardPane`.
+## Working rules
 
-### Rules for further work
-
-1. **Do not change the server or the MCP tool schemas** to suit the UI. If the UI needs something, derive it client-side or record it here as a request.
-2. **Every number on screen comes from a payload** (card payloads, `/api/state`). The UI never computes doses, intervals or totals. Visual-only values (e.g. syringe fill width) are the one exception and are never shown as text.
-3. Safety copy for blocks/lockouts is in `lib/conversation.ts` (`ALERT_COPY`); keep alerts `role="alert"`.
-4. The mock model (`LLM_MODE=mock`) only understands the phrases the preset chips use. Free-form phrasing needs `LLM_MODE=bedrock`. Check `orchestrator/mock.ts` before inventing new chips.
+1. Every number on screen comes from a tool payload. The UI never computes doses, intervals or totals. Visual-only values (the syringe fill) are never shown as text.
+2. Adding a rule: a row in `data/safetyRules.ts` with a source read from a real label, plus a test. Adding a product: a row in `data/labelRegistry.ts` transcribed from the label, with its set id and version.
+3. Safety copy for alerts is in `apps/careos-web/src/lib/conversation.ts`; keep alerts `role="alert"`.
+4. The mock model only understands the preset phrases (`orchestrator/mock.ts`). Free-form phrasing needs `LLM_MODE=gemini`.
 5. `FRICTION_LOG.md` entries must be real and observed, never pre-written.
+6. Nothing may bypass a check: no override tool, argument or route. A test fails if one appears.
 
-## Running it
+## Layout
 
-```
-pnpm install
-pnpm dev:server        # LLM_MODE=mock by default; set LLM_MODE=bedrock + AWS creds in .env for the real model
-pnpm dev:web           # http://localhost:5173  (Chrome for mic input)
-pnpm --filter careos-web test
-pnpm --filter careos-web typecheck
-```
-
-## Next steps (in order)
-
-1. ~~Verify what is written.~~ Done: install, typecheck, tests, `vite build`, both dev servers, and a scripted click-through of all five cards plus the error state (headless Chrome over DevTools, so no extension needed).
-2. ~~Remove the Vega app.~~ Done: `apps/careos-vega/` and the `!apps/careos-vega` workspace line are gone; the last committed version is at `4475c85`.
-3. **Decide the open demo gaps** (see `docs/DEMO.md` "Known issues"):
-   - Supplies do not update after an order (needs a server change, which rule 1 forbids, or a client-side "ordered" badge).
-   - Cross-patient questions ("Can Frank take NyQuil?" with Leo active) do not name the patient on the card. This can be fixed client-side from the tool call's `patient_id`.
-   - The plan's "switch caregiver to Grandma" cannot work: the seed has only Sarah (Mom) and Dad.
-   - "Log 60 ml formula feed" and "What meds are pending?" have no MCP tool behind them (scope change or leave out).
-4. **Live Bedrock smoke test:** `pnpm --filter careos-server smoke:bedrock` (needs AWS credentials), then one UI turn with `LLM_MODE=bedrock` for each flow in `docs/DEMO.md`.
-5. **Deploy (Phase 7):** `vite build` to static hosting; server on App Runner (`infra/` is empty and there is no Dockerfile yet). Replace the dev proxy with routing of `/api` and `/mcp` to the server, or set `ALLOWED_ORIGIN`.
-6. **Phase 8:** open-source release (README for `open-caregiver-mcp`, CI, CONTRIBUTING), friction log review, demo video.
-
-## Unverified
-
-- Web Speech recognition (Chrome/Edge only) and `speechSynthesis` voice quality: not exercised in headless Chrome.
-- Any live Bedrock call, real DynamoDB on AWS (only DynamoDB Local), real SNS delivery.
-- Hand-written, free-form phrasing: the mock only understands the chips.
-
-## Retired: the Vega client
-
-Dropped for these reasons (kept for the record and the friction log): no app-level STT/TTS on Vega (only the keyboard
-mic and VoiceView), streaming `fetch`/`EventSource` undocumented, RN 0.83 package pins differ from the docs, the Vega
-SDK installer is interactive, and no Vega Echo/Alexa+ target is documented. The last committed Vega client is at
-commit `4475c85` (`Phase 5: Vega conversation screen over cursor long-poll`) and can be recovered from git history.
+- `packages/open-caregiver-mcp/src`: `data/` (registry, safety rules, drug classes, `redFlagRules`, locale), `engines/` (label dose, safety matrix, `planMedication`, interval lock, triage, SBAR + dossier, PDF writer), `providers/` (hospital search, vision), `shop.ts`, `escalation.ts`, `prescriptions.ts`, `quietHours.ts`, `service.ts`, `server.ts` (tools, resources), `http.ts` (stateless transport), `storage/`, `testing/storageContract.ts`.
+- `apps/careos-server/src`: `app.ts`, `auth.ts`, `tenants.ts`, `adapters/` (Supabase, DynamoDB, SNS), `orchestrator/` (loop, guardrail, Gemini, Bedrock, mock).
+- `apps/careos-web/src`: `components/` (Cards, Header, Rail, Drawer, ...), `lib/` (pure logic, tested), `hooks/`.
+- `scripts/`: `supabase-schema.sql` (re-runnable), `supabase-reset-v2.sql` (one-time, destructive), DynamoDB Local helpers.

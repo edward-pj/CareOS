@@ -1,29 +1,82 @@
-# Friction Log
+# Friction log
 
-Real entries only, added as they happen during the build.
+Build, Ship, Shape: Amazon Developer Hackathon. Alexa+ track, AWS Builder and Open Source challenges.
 
-## Entry template
-- **Task attempted:**
-- **Steps taken:**
-- **Expected:**
-- **Actual:**
-- **Severity:**
-- **Workaround:**
-- **Suggestion:**
+These are the places where I got stuck while building CareOS. Some of it is my fault and some of it is not, and I've tried to say which is which.
 
-## Entries
-1. **Local DynamoDB** — no Docker on the dev machine, so docker-compose DynamoDB Local is unavailable. (Severity: Low. Workaround: MemoryAdapter for dev/tests; revisit.)
-2. **MCP Streamable HTTP: tracing JSON-RPC frames** — Task: show every JSON-RPC message live in the inspector drawer. Expected: a transport-level hook or event. Actual: `StreamableHTTPServerTransport` exposes none; `onmessage` is only assigned inside `server.connect()`, so the tap must wrap `onmessage` *after* connect and monkey-patch `send`. Severity: Low. Workaround: `tap()` in `packages/open-caregiver-mcp/src/http.ts`. Suggestion: add an official `onFrame`/middleware option to the transport.
-3. **MCP SDK session lifecycle** — Task: serve many clients from one endpoint. Actual: no built-in session map; the caller must detect `initialize`, create a transport per session, track `Mcp-Session-Id`, and clean up on close (and answer 400 vs 404 correctly). Severity: Medium (easy to get subtly wrong). Workaround: `createMcpHttpHandler`. Suggestion: ship this helper in the SDK.
-4. **pnpm 11 build-script gate** — Task: `pnpm install` then `pnpm test`. Actual: esbuild's postinstall is blocked, and every later `pnpm run` aborts on the dependency-status check until `allowBuilds` is set in `pnpm-workspace.yaml` (the old `onlyBuiltDependencies` key was not honoured). Severity: Low. Workaround: `allowBuilds: { esbuild: true }`.
-5. **DynamoDB transactions: no usable local emulator in the npm ecosystem** — Task: test the conditional-write race guarantee offline. Steps: no Docker on the dev machine; tried `dynalite` (pure JS). Actual: `dynalite@4` has no `TransactWriteItems` (its `actions/` lacks it), so the exact feature the AWS challenge hinges on cannot be tested with it. Workaround: official DynamoDB Local jar (Java), downloaded and SHA-256 verified by `scripts/setup-dynamodb-local.sh`. Severity: Medium. Suggestion: publish DynamoDB Local on npm / Homebrew with a one-command start.
-6. **A stale-snapshot race hiding in a "correct" transaction** — Task: guarantee two caregivers can't both log a dose. Actual: a version-checked `TransactWriteItems` still let 2 of 10 concurrent writers succeed because I read the ledger and the lock item in parallel; a commit landing between the two reads passed the version check against a stale ledger. Found by the 10-way concurrency test, not by review. Workaround: read the lock *before* the ledger (anything committed later bumps the version; anything earlier is visible in the ledger read). Severity: High (it's the core safety property). Suggestion: DynamoDB could offer snapshot/transactional reads spanning a Query and a Get, or document this ordering rule next to the optimistic-locking guidance.
-7. **vitest + a `source` export condition** — Task: let tests import a workspace package from `src/`. Actual: a global `resolve.conditions: ["source"]` also matched `eventsource-parser`'s `source` condition and tried to load raw `.ts` from `node_modules` ("Stripping types is currently unsupported for files under node_modules"). Workaround: scoped `resolve.alias` for just our package plus tsconfig `paths`. Severity: Low.
-8. **Vega docs pin the RN 0.72 package line for RN 0.83 apps** — Task: choose navigation/screens/UI package versions for an RN 0.83 app. Steps: followed `react_native_for_vega_navigation.md` and the navigation/ui-components skills, then checked npm. Expected: versions that match the RN 0.83 stack (`react-native-kepler ^4`, React 19.2). Actual: docs say `react-navigation__* ~7.0.0`, `react-native-screens ~2.0.0`, `kepler-ui-components ~2.0.0`; npm's current line is 8.x / 3.x / 3.x. The docs and skills do not say which line belongs to which RN version. Severity: Medium (silent mismatch until build). Workaround: pinned from npm dist-tags; must be re-validated with `vega project doctor` once the SDK is installed. Suggestion: put a version table keyed by RN version in the navigation and UI-components docs.
-9. **`Carousel` is gone from `kepler-ui-components` v3** — Task: add a TV browse row. Steps: followed `amazon-devices-vega-ui-components` and `react_native_for_vega_ui_components.md` (V1 `data`/`itemDimensions`/`getItemForIndex`), installed 3.2.2, ran `tsc`. Actual: `Module has no exported member 'Carousel'`; V2 lives in `@amazon-devices/vega-carousel` (`dataAdapter` API), found only via `migrate_carousel_v1_to_v2.md`. The V2 doc pins `^0.1.0` but npm `latest` is 1.0.1. Severity: Medium. Workaround: used `vega-carousel ^1.0.1` and the V2 API reference. Suggestion: update the skill and KB to V2 and flag the RN 0.72 vs 0.83 split at the top.
-10. **No app-level speech-to-text or text-to-speech on Vega** — Task: port the planned Web Speech voice loop. Actual: Vega exposes no STT/TTS API; STT is only the platform keyboard's mic (focused `TextInput` + hold the Alexa button) and speech output is VoiceView only (community.amazondeveloper.com threads on STT support). Severity: High for a voice-first design. Workaround: typed/dictated `TextInput` + D-pad quick actions, `aria-live` for announcements. Suggestion: document this limitation in the Vega overview and offer an official push-to-talk API.
-11. **Builder Tools MCP requires `set_project_context` even with no `.adbt-config.json`** — Task: start a session in a repo with no config. Actual: every tool returned `PROJECT_CONTEXT_REQUIRED` until `set_project_context({config: {}})` was called, while the project instructions say to skip that step when the file is missing. Severity: Low. Workaround: call it with an empty config. Suggestion: align the session-setup text with the server's behaviour.
-12. **Cleartext HTTP policy is documented for WebView only** — Task: let the native app call a local dev server over HTTP. Actual: `network-traffic-policy.cleartext` is described for WebView 4.0.2+ (RN 0.83); nothing says whether native XHR/fetch is affected. Severity: Low (unverified until a device run). Workaround: allowlist only `localhost` in the manifest for dev and use HTTPS in production.
-13. **Vega SDK install is interactive, so an agent cannot finish the setup** — Task: build and run the app. Actual: `vega`/`kepler` not on PATH; `vega_sdk_installation.md` says the installer must be run by the user. The app was therefore type-checked only (`tsc`), not built or run on the Vega Virtual Device. Severity: Medium. Suggestion: a documented non-interactive bootstrap that works before `vega` exists.
-14. **Vite dev proxy hides a dead backend behind a bare 500** — Task: show a clear message when `careos-server` is down. Steps: killed the server while the web app was open. Expected: `fetch` rejects and the app's "Cannot reach the server" path runs. Actual: the proxy answered `500 text/plain` with no body, so `fetch` resolved; the UI showed "GET /api/state failed (500)", the LIVE badge stayed green, and the panel kept showing a green "Clear to dose" from stale data. Severity: High for a dosing display. Workaround: treat a 5xx without a JSON body as "unreachable" (`isGatewayFailure`), show "Status unknown" instead of stale dose status, and tie the LIVE badge to a successful refresh. Suggestion: have the proxy return 502/504 with a JSON body.
-15. **Headless Chrome screenshot hangs while SSE streams are open** — Task: visual QA without the Claude-in-Chrome extension (it was not connected). Steps: `chrome --headless=new --virtual-time-budget=6000 --screenshot=...` against the dev server. Actual: no screenshot for 60 s (open EventSource connections keep the virtual-time budget from settling). Workaround: an isolated `--user-data-dir` with `--timeout=8000` produced a screenshot, and a small script drove the real UI over the DevTools protocol using Node's built-in WebSocket. Severity: Low.
+---
+
+## 1. Amazon Bedrock would not run a model on my new account
+
+**Task.** I wanted a Bedrock model to power the conversation layer of the MCP app, because I wanted to use AWS for the AWS Builder challenge. I started with Anthropic models in the Bedrock playground, then tried Amazon Nova.
+
+**What I did.** Account was a few weeks old. The models in the playground didn't respond for me. I created IAM policies for Bedrock and attached them. I emailed AWS support and didn't get a reply. I changed regions to see if it was regional, and it still failed. Then I ran this from the CLI:
+
+aws bedrock-runtime converse --region us-east-1 --model-id us.amazon.nova-lite-v1:0 --messages ‘[{“role”:”user”,”content”:[{“text”:”hi”}]}]’
+
+
+**What I expected.** A normal reply, or an error that says what to fix: a missing permission, a quota, or an account check.
+
+**What happened.**
+
+An error occurred (ValidationException) when calling the Converse operation: Operation not allowed
+
+
+That message doesn't say which of the things I'd already changed was wrong, or whether it's an account-level block. I couldn't tell from it what to do next.
+
+**Workaround.** I kept Gemini as the LLM for the conversation layer and added a mock mode, so the project runs with no model at all. The safety engine is deterministic, so it still works in mock mode.
+
+**Time lost.** TODO: Pratham to fill in hours.
+
+**Severity.** Blocker for the AWS Builder challenge. Not a blocker for the Alexa+ track.
+
+**Suggestion for the Amazon team.** When Bedrock returns "Operation not allowed", say why. Tell me if the account needs verification, if a quota is zero, or if a model needs a use-case form, and link the page to fix it. A console check that lists these would have saved me most of the time.
+
+---
+
+## 2. Vega dev setup failed, so I fell back to the normal dev path
+
+**Task.** I wanted to run the TV client on a Vega device for the Alexa+ demo.
+
+**What I did.** Followed the setup steps and tried to get a Vega build running.
+
+**What I expected.** A working dev loop, like a phone or simulator build.
+
+**What happened.** I ran into dependency issues I couldn't work out. TODO: Pratham to paste the exact error text and the step where it failed.
+
+**Workaround.** I switched to the standard development mode and kept the Vega client out of the demo. The Vega client also has limits I found in the docs: no speech-to-text, no text-to-speech and no server-sent events, so the client uses a cursor-based long poll instead.
+
+**Severity.** Medium. It didn't block the submission, but it cut out a platform I wanted to show.
+
+**Suggestion for the Amazon team.** Publish a known-good Vega setup with pinned versions, and list the dependency combinations that have been tested. A short "if this fails, run this" section would help a lot.
+
+---
+
+## 3. Gap I found while building: one-off answers aren't enough
+
+**Task.** The first version of CareOS covered two cases, an infant and an elderly parent. Once I had that working, it felt like a narrow tool. I wanted it to handle the whole household.
+
+**What I did.** I added more of the workflow: a cart that restocks from low-stock signals, a read of past context and prescriptions, and an idea for ordering the whole restock automatically from that context.
+
+**What I expected.** The platform would make it easy to connect the parts, like inventory, memory and ordering, so an agent could run the whole loop.
+
+**What happened.** I had to build each part by hand, and I didn't get automatic ordering. The app deliberately doesn't auto-order. A person still has to stage and confirm each cart. That was a safety decision, but it means the "agent does everything" version isn't built yet.
+
+**Severity.** Low for the current submission. High for the product.
+
+**Suggestion for the Amazon team.** Give agents a standard way to ask for approval before a purchase, like an MCP elicitation step that a voice assistant can answer. That would let the agent act on its own without skipping the human.
+
+---
+
+## Feature requests
+
+- **Standard approval step for purchases (Critical).** Agents need a way to ask a person to confirm an action, with the answer returned to the agent. Without it, the choice is between no automation and unsafe automation. This is why CareOS keeps a human confirmation step.
+- **Medication and product data access (Important).** A clean, licensed source for product labels and strengths would let apps like this check doses without hand-curated tables. My current table covers five products only.
+- **Better Bedrock account diagnostics (Important).** Specific reasons for "Operation not allowed" would cut out most of the debugging.
+- **Vega setup docs with pinned versions (Nice-to-have).** Working dependency combinations would save new developers time.
+
+---
+
+## Would I build with this again?
+
+Partly yes. The MCP protocol and Alexa+ fit what I wanted. Building the MCP server was straightforward, and the tool model made the safety checks easy to test. I would not build with Bedrock again until I can get model access working on a fresh account, because I could not get a single reply from it. My real reason is that a platform that can't tell you why it's blocked costs you more than one that's a bit slower.

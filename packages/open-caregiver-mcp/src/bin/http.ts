@@ -14,5 +14,5 @@ createServer(async (req, res) => {
     for await (const c of req) chunks.push(c as Buffer);
     body = JSON.parse(Buffer.concat(chunks).toString() || "null");
   }
-  await handle(req, res, body);
+  await handle(req, res, body, undefined);
 }).listen(port, () => console.error(`open-caregiver-mcp on http://localhost:${port}/mcp`));

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 export interface StoredEvent { seq: number; type: string; data: unknown }
 
-interface Turn { events: StoredEvent[]; done: boolean; createdAt: number; bus: EventEmitter }
+interface Turn { owner: string; events: StoredEvent[]; done: boolean; createdAt: number; bus: EventEmitter }
 
 /**
  * Per-turn event log with a cursor. One source feeds both transports: SSE for browsers/tests and a
@@ -14,16 +14,21 @@ export class TurnStore {
 
   constructor(private ttlMs = 10 * 60_000, private maxTurns = 200, private clock: () => number = Date.now) {}
 
-  create(): string {
+  /** `owner` is the household that started the turn; only it may read the turn back. */
+  create(owner = ""): string {
     this.prune();
     const id = `turn_${randomUUID().slice(0, 12)}`;
     const bus = new EventEmitter();
     bus.setMaxListeners(0);
-    this.turns.set(id, { events: [], done: false, createdAt: this.clock(), bus });
+    this.turns.set(id, { owner, events: [], done: false, createdAt: this.clock(), bus });
     return id;
   }
 
-  has(id: string): boolean { return this.turns.has(id); }
+  /** With `owner`, a turn belonging to another household reads as nonexistent (no existence oracle). */
+  has(id: string, owner?: string): boolean {
+    const t = this.turns.get(id);
+    return t !== undefined && (owner === undefined || t.owner === owner);
+  }
 
   append(id: string, type: string, data: unknown): void {
     const t = this.turns.get(id);
