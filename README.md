@@ -12,9 +12,15 @@ It is an MCP server (`packages/open-caregiver-mcp`), a small Express host that w
 
 ## Demo and hackathon
 
-- Demo video: <!-- TODO: Pratham to confirm --> VIDEO_LINK_HERE
+- Demo video: https://www.youtube.com/watch?v=g0Ek4lfIpzg
 - Hackathon: Build, Ship, Shape Amazon Developer Hackathon, Alexa+ track.
-- Mini challenges: <!-- TODO: Pratham to confirm which mini challenges this entry is for -->
+- Mini challenges: 
+
+AWS Builder - 
+I planned to use Amazon Bedrock for the conversation and for reading prescriptions, but my new AWS account couldn’t access Bedrock models in time. I moved that layer to Gemini, and the rest of the system (MCP server, safety engine, tests) is built and running.
+
+Open Source - 
+open-caregiver-mcp is a reusable MCP-ready safety engine in the CareOS repo (packages/open-caregiver-mcp): FDA-label dose lookup, drug-interaction rules and emergency triage rules. It ships with 174 passing tests, and any MCP client can use it.
 
 ## Quick start (no keys)
 
@@ -197,11 +203,11 @@ As Dad: "Stop. Sarah gave Infants' Motrin 18 minutes ago, so the next dose is al
 
 ## Alexa+ note
 
-What I mean by an Alexa+-ready MCP server: a remote MCP server on Streamable HTTP, stateless so any instance can answer any request, that expects a bearer token in the `Authorization` header. That is my reading of how Alexa+ links an account and calls tools. <!-- TODO: Pratham to confirm this matches the Alexa+ MCP requirements you were given --> The tools also carry descriptions that tell the model what to read aloud (`speech`, `read_verbatim`). `docs/MCP.md` sketches how Alexa+'s OAuth token would map to a household and caregiver.
+What I mean by an Alexa+-ready MCP server: a remote MCP server on Streamable HTTP, stateless so any instance can answer any request, that expects a bearer token in the `Authorization` header. That is my reading of how Alexa+ links an account and calls tools. The tools also carry descriptions that tell the model what to read aloud (`speech`, `read_verbatim`). `docs/MCP.md` sketches how Alexa+'s OAuth token would map to a household and caregiver.
 
 What I actually built and tested: the server above, over plain HTTP from `curl`, the MCP Inspector CLI, my own MCP client, and the test suite.
 
-What I did not do: I have not connected this to Alexa+ or any Echo device. OAuth account linking is not implemented. Auth is a static token table (`TokenAuth.authenticate` in `apps/careos-server/src/auth.ts`), which is the one place real token checking would go. <!-- TODO: Pratham to confirm how, or whether, this was tried against real Alexa+ -->
+What I did not do: I have not connected this to Alexa+ or any Echo device. OAuth account linking is not implemented. Auth is a static token table (`TokenAuth.authenticate` in `apps/careos-server/src/auth.ts`), which is the one place real token checking would go.
 
 The web app stands in for the device. It draws an Echo Show 15 screen (1920x1080, scaled to fit) with cards, a voice orb and drawers for the MCP trace and the data. `POST /api/converse` runs a Gemini tool loop that plays the part of Alexa+. It is my substitute, not Alexa's behaviour, and real Alexa+ will phrase and call things its own way. Browser speech needs Chrome and a microphone, and no automated test covers it.
 
@@ -223,7 +229,7 @@ That is 519 passed and 1 skipped. The skipped test is the live Supabase contract
 
 ## What I built during the hackathon window, and what was already there
 
-The git history has 9 commits, from 2026-10-15 22:39 to 2026-10-18 09:01 (+0530). The first commit ("Scaffold CareOS monorepo and deterministic safety engines") has nothing before it, so the history shows no earlier work. <!-- TODO: Pratham to confirm the hackathon start date and whether any code or ideas predate it -->
+The git history has 9 commits, from 2026-10-15 22:39 to 2026-10-18 09:01 (+0530). The first commit ("Scaffold CareOS monorepo and deterministic safety engines") has nothing before it, so the history shows no earlier work.
 
 Rough timeline from the log:
 
@@ -231,7 +237,7 @@ Rough timeline from the log:
 - Oct 16: Bedrock orchestrator, a React Native for Vega client, then the Vega client deleted again in the "basic structure done" commit that evening.
 - Oct 18: Gemini and Supabase added.
 
-A lot of the current code is not committed yet. At the time of writing, the label registry (retrieved 2026-10-19), bearer auth, tenants, triage, photo reading, the simulated Amazon shop and the Supabase RPC schema are modified or untracked in the working tree, so `git log` understates the work. I will commit before submitting. <!-- TODO: Pratham to confirm everything is committed before submission -->
+A lot of the current code is not committed yet. At the time of writing, the label registry (retrieved 2026-10-19), bearer auth, tenants, triage, photo reading, the simulated Amazon shop and the Supabase RPC schema are modified or untracked in the working tree, so `git log` understates the work. I will commit before submitting. 
 
 `FRICTION_LOG.md` has the problems I hit along the way, including a DynamoDB transaction race that only a concurrency test caught.
 
@@ -250,6 +256,6 @@ A lot of the current code is not committed yet. At the time of writing, the labe
 
 ## License and credits
 
-MIT. The repo root `LICENSE` reads "CareOS contributors", and `packages/open-caregiver-mcp` has its own MIT license. <!-- TODO: Pratham to confirm the copyright holder name -->
+MIT. The repo root `LICENSE` reads "CareOS contributors", and `packages/open-caregiver-mcp` has its own MIT license. 
 
 Dose and safety data come from FDA labels via openFDA and DailyMed, and red-flag sources are the AAP and NHS pages listed in `redFlagRules.ts`. Built with the MCP TypeScript SDK, Express, React, Vite, Tailwind, Gemini, Supabase, and PGlite for the SQL tests.
